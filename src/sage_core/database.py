@@ -49,6 +49,9 @@ class SageDatabase:
                     title TEXT NOT NULL,
                     description TEXT,
                     status TEXT NOT NULL,
+                    priority TEXT NOT NULL DEFAULT 'MEDIUM',
+                    due_at TEXT,
+                    recurrence TEXT,
                     created_at TEXT NOT NULL,
                     approval_request_id TEXT NOT NULL UNIQUE,
                     FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
@@ -76,3 +79,17 @@ class SageDatabase:
                 );
                 """
             )
+            self._addTaskColumnIfMissing(connection, "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")
+            self._addTaskColumnIfMissing(connection, "due_at", "TEXT")
+            self._addTaskColumnIfMissing(connection, "recurrence", "TEXT")
+
+    def _addTaskColumnIfMissing(
+        self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
+    ) -> None:
+        """Migrate early local databases without discarding approved task history."""
+        taskColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        if columnName not in taskColumns:
+            connection.execute(f"ALTER TABLE tasks ADD COLUMN {columnName} {columnDefinition}")

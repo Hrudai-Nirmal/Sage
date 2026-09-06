@@ -18,6 +18,9 @@ class TaskProposalPayload(BaseModel):
     """Validate the minimal personal information required to propose a task."""
 
     description: str | None = Field(default=None, max_length=10_000)
+    dueAt: str | None = Field(default=None, max_length=100)
+    priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "MEDIUM"
+    recurrence: str | None = Field(default=None, max_length=1_000)
     title: str = Field(min_length=1, max_length=500)
 
 

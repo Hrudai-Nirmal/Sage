@@ -63,6 +63,9 @@ def testCreatesTaskOnlyAfterApprovalConfirmation(tmp_path):
         assert client.get("/v1/tasks").json() == [
             {
                 "description": "Verify the approval gate.",
+                "dueAt": None,
+                "priority": "MEDIUM",
+                "recurrence": None,
                 "status": "OPEN",
                 "title": "Review Sage approval flow",
             }
@@ -106,6 +109,50 @@ def testCreatesCaseOnlyAfterApprovalConfirmation(tmp_path):
                 "objective": "Build a reliable local personal assistant.",
                 "status": "ACTIVE",
                 "title": "Sage MVP",
+            }
+        ]
+
+
+def testCreatesScheduledTaskMetadataOnlyAfterApproval(tmp_path):
+    """Deadline and recurrence metadata must receive the same approval protection as tasks."""
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=tmp_path / "sage.db",
+        proposalToken="proposal-token",
+    )
+
+    with TestClient(app) as client:
+        proposalResponse = client.post(
+            "/v1/approval-requests",
+            json={
+                "actionType": "CREATE_TASK",
+                "payload": {
+                    "dueAt": "2026-09-08T09:00:00+05:30",
+                    "priority": "HIGH",
+                    "recurrence": "FREQ=DAILY",
+                    "title": "Review daily agenda",
+                },
+            },
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+        )
+        approvalId = proposalResponse.json()["id"]
+
+        assert client.get("/v1/tasks").json() == []
+
+        client.post(
+            f"/v1/approval-requests/{approvalId}/confirm",
+            json={"approvedBy": "telegram:123456"},
+            headers={"X-Sage-Approval-Token": "approval-token"},
+        )
+
+        assert client.get("/v1/tasks").json() == [
+            {
+                "description": None,
+                "dueAt": "2026-09-08T09:00:00+05:30",
+                "priority": "HIGH",
+                "recurrence": "FREQ=DAILY",
+                "status": "OPEN",
+                "title": "Review daily agenda",
             }
         ]
 

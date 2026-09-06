@@ -85,13 +85,17 @@ class ApprovalStateRepository:
                 connection.execute(
                     """
                     INSERT INTO tasks (
-                        id, title, description, status, created_at, approval_request_id
-                    ) VALUES (?, ?, ?, 'OPEN', ?, ?)
+                        id, title, description, status, priority, due_at, recurrence,
+                        created_at, approval_request_id
+                    ) VALUES (?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
                         taskPayload["title"],
                         taskPayload["description"],
+                        taskPayload.get("priority", "MEDIUM"),
+                        taskPayload.get("dueAt"),
+                        taskPayload.get("recurrence"),
                         datetime.now(UTC).isoformat(),
                         approvalId,
                     ),
@@ -128,12 +132,23 @@ class ApprovalStateRepository:
         """Return user tasks without exposing internal approval implementation details."""
         with self.database.connectDatabase() as connection:
             taskRows = connection.execute(
-                "SELECT title, description, status FROM tasks ORDER BY created_at"
+                """
+                SELECT title, description, status, priority, due_at, recurrence
+                FROM tasks
+                ORDER BY created_at
+                """
             ).fetchall()
 
         return [
-            {"title": title, "description": description, "status": status}
-            for title, description, status in taskRows
+            {
+                "title": title,
+                "description": description,
+                "status": status,
+                "priority": priority,
+                "dueAt": dueAt,
+                "recurrence": recurrence,
+            }
+            for title, description, status, priority, dueAt, recurrence in taskRows
         ]
 
     def listCases(self) -> list[dict[str, str]]:
