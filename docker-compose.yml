@@ -1,0 +1,38 @@
+# Docker services own orchestration and Core; native launchd owns Apple Silicon model processes.
+name: sage
+
+services:
+  sage-core:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.core
+    env_file:
+      - ${SAGE_CORE_ENV_FILE:?Set SAGE_CORE_ENV_FILE in .env}
+    environment:
+      SAGE_DATA_ROOT: /var/lib/sage
+    ports:
+      - "127.0.0.1:8787:8787"
+    restart: unless-stopped
+    volumes:
+      - ${SAGE_DATA_ROOT:?Set SAGE_DATA_ROOT in .env}:/var/lib/sage
+
+  n8n:
+    image: n8nio/n8n:2.37.10
+    env_file:
+      - ${SAGE_N8N_ENV_FILE:?Set SAGE_N8N_ENV_FILE in .env}
+    environment:
+      GENERIC_TIMEZONE: ${TZ:-Asia/Kolkata}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_HOST: 127.0.0.1
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      TZ: ${TZ:-Asia/Kolkata}
+    ports:
+      - "127.0.0.1:5678:5678"
+    restart: unless-stopped
+    volumes:
+      - n8n-data:/home/node/.n8n
+
+volumes:
+  n8n-data:

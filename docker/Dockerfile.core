@@ -1,0 +1,13 @@
+# Sage Core runs without model weights or external host folders; its managed data root is mounted at runtime.
+FROM python:3.14-slim
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY src ./src
+
+RUN pip install --no-cache-dir .
+
+EXPOSE 8787
+
+CMD ["uvicorn", "--factory", "sage_core.main:createConfiguredApp", "--host", "0.0.0.0", "--port", "8787"]

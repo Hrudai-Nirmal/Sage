@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sage.model-iris</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>__SAGE_PROJECT_ROOT__/scripts/start-model-server.sh</string>
+    <string>iris</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__SAGE_DATA_ROOT__/logs/model-iris.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__SAGE_DATA_ROOT__/logs/model-iris.error.log</string>
+</dict>
+</plist>

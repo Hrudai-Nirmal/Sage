@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sage.model-sage</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>__SAGE_PROJECT_ROOT__/scripts/start-model-server.sh</string>
+    <string>sage</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__SAGE_DATA_ROOT__/logs/model-sage.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__SAGE_DATA_ROOT__/logs/model-sage.error.log</string>
+</dict>
+</plist>

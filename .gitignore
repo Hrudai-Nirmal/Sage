@@ -1,0 +1,14 @@
+# Runtime state and secrets are deliberately isolated from version-controlled application code.
+.env
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite
+*.sqlite3
+dist/
+build/
+*.egg-info/
+
+# Never accept a local data-root shortcut or model artifacts into the repository.
+SageData/
