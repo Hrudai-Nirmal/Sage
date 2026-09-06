@@ -6,13 +6,14 @@ from pathlib import Path
 from secrets import compare_digest
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
 from sage_core.document_state import DocumentStateRepository
 from sage_core.system_state import SystemStateRepository
+from sage_core.telegram_state import TelegramMessage, TelegramStateRepository
 
 
 class TaskProposalPayload(BaseModel):
@@ -65,6 +66,16 @@ class DocumentImportPayload(BaseModel):
     sourceRoot: str = Field(min_length=1, max_length=100)
 
 
+class TelegramMessagePayload(BaseModel):
+    """Validate the normalized inbound Telegram message sent by n8n."""
+
+    chatId: int
+    messageId: int = Field(ge=1)
+    messageThreadId: int = Field(ge=1)
+    senderId: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=10_000)
+
+
 def createApp(
     databasePath: Path,
     dataRoot: Path | None = None,
@@ -72,6 +83,10 @@ def createApp(
     operatorToken: str = "",
     proposalToken: str = "",
     approvalToken: str = "",
+    telegramAllowedUserId: int | None = None,
+    telegramChatId: int | None = None,
+    telegramIngressToken: str = "",
+    telegramTopicIds: dict[str, int] | None = None,
 ) -> FastAPI:
     """Create Sage Core with an explicit SQLite path for predictable local state."""
     if not isinstance(databasePath, Path):
@@ -86,6 +101,12 @@ def createApp(
         importRoots=importRoots or {},
     )
     systemStateRepository = SystemStateRepository(database)
+    telegramStateRepository = TelegramStateRepository(
+        database=database,
+        allowedUserId=telegramAllowedUserId,
+        chatId=telegramChatId,
+        topicIds=telegramTopicIds,
+    )
     app = FastAPI(title="Sage Core", version="0.1.0")
 
     @app.get("/v1/system/status")
@@ -176,6 +197,27 @@ def createApp(
     def listDocuments() -> list[dict[str, str]]:
         """List documents from Sage's SQLite registry rather than the filesystem."""
         return documentStateRepository.listDocuments()
+
+    @app.post("/v1/telegram/messages", status_code=status.HTTP_201_CREATED)
+    def acceptTelegramMessage(
+        messagePayload: TelegramMessagePayload,
+        response: Response,
+        sageTelegramIngressToken: str = Header(alias="X-Sage-Telegram-Ingress-Token"),
+    ) -> dict[str, str]:
+        """Accept one n8n-relayed message only after credential and forum validation."""
+        _validateToken(sageTelegramIngressToken, telegramIngressToken)
+        try:
+            topicName, isNewMessage = telegramStateRepository.acceptMessage(
+                TelegramMessage(**messagePayload.model_dump())
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        if not isNewMessage:
+            response.status_code = status.HTTP_200_OK
+            return {"status": "DUPLICATE", "topic": topicName}
+        return {"status": "ACCEPTED", "topic": topicName}
 
     return app
 

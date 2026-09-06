@@ -38,7 +38,12 @@ if [[ ! -f "${secretRoot}/core.env" ]]; then
     print "SAGE_APPROVAL_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_OPERATOR_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_PROPOSAL_TOKEN=$(openssl rand -hex 32)"
+    print "SAGE_TELEGRAM_INGRESS_TOKEN=$(openssl rand -hex 32)"
   } > "${secretRoot}/core.env"
+fi
+
+if ! grep -q '^SAGE_TELEGRAM_INGRESS_TOKEN=' "${secretRoot}/core.env"; then
+  print "SAGE_TELEGRAM_INGRESS_TOKEN=$(openssl rand -hex 32)" >> "${secretRoot}/core.env"
 fi
 
 if [[ ! -f "${secretRoot}/model-server.env" ]]; then
@@ -59,6 +64,7 @@ if [[ ! -f "${sageProjectRoot}/.env" ]]; then
     print "SAGE_DATA_ROOT=${sageDataRoot}"
     print "SAGE_CORE_ENV_FILE=${secretRoot}/core.env"
     print "SAGE_N8N_ENV_FILE=${secretRoot}/n8n.env"
+    print "SAGE_TELEGRAM_ENV_FILE=${secretRoot}/telegram.env"
     print "SAGE_DOWNLOADS_HOST_PATH=/Users/hrudainirmal/Downloads"
     print "TZ=Asia/Kolkata"
   } > "${sageProjectRoot}/.env"
@@ -67,4 +73,8 @@ fi
 
 if ! grep -q '^SAGE_DOWNLOADS_HOST_PATH=' "${sageProjectRoot}/.env"; then
   print "SAGE_DOWNLOADS_HOST_PATH=/Users/hrudainirmal/Downloads" >> "${sageProjectRoot}/.env"
+fi
+
+if ! grep -q '^SAGE_TELEGRAM_ENV_FILE=' "${sageProjectRoot}/.env"; then
+  print "SAGE_TELEGRAM_ENV_FILE=${secretRoot}/telegram.env" >> "${sageProjectRoot}/.env"
 fi

@@ -88,6 +88,15 @@ class SageDatabase:
                     checksum TEXT NOT NULL UNIQUE,
                     imported_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS telegram_messages (
+                    message_id INTEGER PRIMARY KEY,
+                    chat_id INTEGER NOT NULL,
+                    message_thread_id INTEGER NOT NULL,
+                    sender_id INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    received_at TEXT NOT NULL
+                );
                 """
             )
             self._addTaskColumnIfMissing(connection, "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")

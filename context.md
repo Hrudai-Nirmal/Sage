@@ -9,6 +9,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Sage Core uses FastAPI and SQLite; n8n orchestrates deterministic external workflows.
 - Sage and Iris run as separate native `mlx-vlm` launchd services; application services run through Docker Compose.
 - User-authorized approvals are server-validated, single-use Telegram button actions. Models cannot approve their own work.
+- Telegram ingress is restricted to the configured numeric user, one forum group, and the Main, Scheduled Reports, and Notifications topics.
 - Files are copied into `/Users/hrudainirmal/SageData` and never altered at their external source.
 - All runtime data and secrets stay outside Git; only templates and safe configuration are versioned.
 
@@ -22,3 +23,4 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Model ports are single-instance reservations: `18080` for Sage and `18081` for Iris. A process guard rejects an occupied port unless it belongs to the matching model.
 - Daily maintenance clears only Sage temporary artifacts older than seven days and model-server memory caches; it does not delete documents, databases, model weights, or backup data.
 - Tasks are approval-created and initially support title, notes, priority, due timestamp, and recurrence. New schema columns are added without dropping existing SQLite task data.
+- Telegram delivery is at-least-once: Core records each Telegram message ID once and returns a successful duplicate acknowledgement for safe n8n retries.

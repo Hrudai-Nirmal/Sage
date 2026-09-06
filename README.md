@@ -5,11 +5,11 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 ## Current foundation
 
 - Native MLX-VLM model services are verified with Sage (`Qwen3.5-9B-6bit`) and Iris (`Qwen3-VL-2B-Instruct-4bit`).
-- Sage Core is a FastAPI + SQLite service with durable modes, task/case approval gates, separate proposal/approval/operator credentials, and an audit trail.
+- Sage Core is a FastAPI + SQLite service with durable modes, task/case approval gates, separate proposal/approval/operator credentials, an audit trail, and an allowlisted Telegram ingress boundary.
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
 
-The Telegram bot, Google OAuth, n8n workflows, external-folder import allowlist, document registry, skills, and backup scheduler remain to be implemented after their required credentials and configuration are available.
+Telegram routing is configured privately for the chosen forum group. The n8n long-polling workflow, Google OAuth, skills, and backup scheduling remain to be implemented after their required credentials and configuration are available.
 
 ## Local setup
 
@@ -54,6 +54,7 @@ scripts/shutdown-sage.sh
 
 - Sage never writes to external source folders; future imports copy into the managed data root.
 - Task, case, skill, and workflow changes are designed to use one-time user approvals. Core distinguishes the agent proposal channel from the approval channel.
+- Telegram messages are accepted only from the configured numeric user and Sage forum topics; retrying the same Telegram message ID is safe.
 - Secrets have mode `0600` under `/Users/hrudainirmal/SageData/secrets` and are not tracked by Git.
 - Model services and Docker application ports are loopback-only.
 - A model server never starts when its reserved port belongs to another process; a matching existing server is reused instead of duplicated.

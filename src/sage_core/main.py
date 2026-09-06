@@ -22,6 +22,16 @@ def createConfiguredApp() -> FastAPI:
         },
         operatorToken=_getRequiredEnvironmentValue("SAGE_OPERATOR_TOKEN"),
         proposalToken=_getRequiredEnvironmentValue("SAGE_PROPOSAL_TOKEN"),
+        telegramAllowedUserId=_getRequiredEnvironmentInteger("SAGE_TELEGRAM_ALLOWED_USER_ID"),
+        telegramChatId=_getRequiredEnvironmentInteger("SAGE_TELEGRAM_CHAT_ID"),
+        telegramIngressToken=_getRequiredEnvironmentValue("SAGE_TELEGRAM_INGRESS_TOKEN"),
+        telegramTopicIds={
+            "MAIN": _getRequiredEnvironmentInteger("SAGE_TELEGRAM_MAIN_TOPIC_ID"),
+            "REPORTS": _getRequiredEnvironmentInteger("SAGE_TELEGRAM_REPORTS_TOPIC_ID"),
+            "NOTIFICATIONS": _getRequiredEnvironmentInteger(
+                "SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID"
+            ),
+        },
     )
 
 
@@ -36,3 +46,12 @@ def _getRequiredEnvironmentValue(name: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+def _getRequiredEnvironmentInteger(name: str) -> int:
+    """Read one required integer setting and fail clearly instead of silently coercing it."""
+    value = _getRequiredEnvironmentValue(name)
+    try:
+        return int(value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer") from error

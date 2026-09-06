@@ -219,11 +219,94 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
     monkeypatch.setenv("SAGE_DOWNLOADS_IMPORT_ROOT", str(downloadsRoot))
     monkeypatch.setenv("SAGE_OPERATOR_TOKEN", "operator-token")
     monkeypatch.setenv("SAGE_PROPOSAL_TOKEN", "proposal-token")
+    monkeypatch.setenv("SAGE_TELEGRAM_ALLOWED_USER_ID", "8961856168")
+    monkeypatch.setenv("SAGE_TELEGRAM_CHAT_ID", "-1004370918853")
+    monkeypatch.setenv("SAGE_TELEGRAM_INGRESS_TOKEN", "telegram-ingress-token")
+    monkeypatch.setenv("SAGE_TELEGRAM_MAIN_TOPIC_ID", "5")
+    monkeypatch.setenv("SAGE_TELEGRAM_REPORTS_TOPIC_ID", "6")
+    monkeypatch.setenv("SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID", "7")
 
     app = createConfiguredApp()
 
     with TestClient(app) as client:
         assert client.get("/v1/system/status").status_code == 200
+        response = client.post(
+            "/v1/telegram/messages",
+            json={
+                "chatId": -1004370918853,
+                "messageId": 1,
+                "messageThreadId": 5,
+                "senderId": 8961856168,
+                "text": "Configured securely",
+            },
+            headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
+        )
+
+    assert response.status_code == 201
+
+
+def testAcceptsOnlyAllowlistedTelegramMessagesFromConfiguredForumTopics(tmp_path):
+    """Inbound automation must reject a foreign user, chat, or unapproved topic."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        telegramAllowedUserId=8961856168,
+        telegramChatId=-1004370918853,
+        telegramIngressToken="telegram-ingress-token",
+        telegramTopicIds={"MAIN": 5, "REPORTS": 6, "NOTIFICATIONS": 7},
+    )
+
+    with TestClient(app) as client:
+        acceptedResponse = client.post(
+            "/v1/telegram/messages",
+            json={
+                "chatId": -1004370918853,
+                "messageId": 42,
+                "messageThreadId": 5,
+                "senderId": 8961856168,
+                "text": "Create a test task",
+            },
+            headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
+        )
+        foreignUserResponse = client.post(
+            "/v1/telegram/messages",
+            json={
+                "chatId": -1004370918853,
+                "messageId": 43,
+                "messageThreadId": 5,
+                "senderId": 999,
+                "text": "Do something unsafe",
+            },
+            headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
+        )
+        wrongTopicResponse = client.post(
+            "/v1/telegram/messages",
+            json={
+                "chatId": -1004370918853,
+                "messageId": 44,
+                "messageThreadId": 999,
+                "senderId": 8961856168,
+                "text": "Wrong destination",
+            },
+            headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
+        )
+        duplicateResponse = client.post(
+            "/v1/telegram/messages",
+            json={
+                "chatId": -1004370918853,
+                "messageId": 42,
+                "messageThreadId": 5,
+                "senderId": 8961856168,
+                "text": "Create a test task",
+            },
+            headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
+        )
+
+    assert acceptedResponse.status_code == 201
+    assert acceptedResponse.json() == {"status": "ACCEPTED", "topic": "MAIN"}
+    assert foreignUserResponse.status_code == 403
+    assert wrongTopicResponse.status_code == 403
+    assert duplicateResponse.status_code == 200
+    assert duplicateResponse.json() == {"status": "DUPLICATE", "topic": "MAIN"}
 
 
 def testBootstrapsManagedDataRootAndPrivateCredentials(tmp_path):
@@ -251,6 +334,45 @@ def testBootstrapsManagedDataRootAndPrivateCredentials(tmp_path):
     assert (dataRoot / "secrets" / "core.env").is_file()
     assert (dataRoot / "secrets" / "core.env").stat().st_mode & 0o077 == 0
     assert (projectRoot / ".env").is_file()
+
+
+def testConfiguresTelegramSettingsWithoutPrintingBotCredential(tmp_path):
+    """Telegram setup must retain its token in a mode-restricted private runtime file."""
+    dataRoot = tmp_path / "SageData"
+    secretRoot = dataRoot / "secrets"
+    secretRoot.mkdir(parents=True)
+    telegramFile = secretRoot / "telegram.env"
+    telegramFile.write_text("TELEGRAM_BOT_TOKEN=private-token\n")
+    repositoryRoot = Path(__file__).parents[2]
+
+    configureProcess = run(
+        [
+            repositoryRoot / "scripts" / "configure-telegram.sh",
+            "--allowed-user-id",
+            "8961856168",
+            "--chat-id",
+            "-1004370918853",
+            "--main-topic-id",
+            "5",
+            "--reports-topic-id",
+            "6",
+            "--notifications-topic-id",
+            "7",
+        ],
+        capture_output=True,
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
+            "SAGE_DATA_ROOT": str(dataRoot),
+        },
+        text=True,
+    )
+
+    assert configureProcess.returncode == 0
+    assert "private-token" not in configureProcess.stdout
+    assert "TELEGRAM_BOT_TOKEN=private-token" in telegramFile.read_text()
+    assert "SAGE_TELEGRAM_MAIN_TOPIC_ID=5" in telegramFile.read_text()
+    assert telegramFile.stat().st_mode & 0o077 == 0
 
 
 def testPreventsSecondModelServerWhenItsReservedPortIsOccupied(tmp_path):
