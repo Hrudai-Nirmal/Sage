@@ -10,11 +10,13 @@ services:
       - ${SAGE_CORE_ENV_FILE:?Set SAGE_CORE_ENV_FILE in .env}
     environment:
       SAGE_DATA_ROOT: /var/lib/sage
+      SAGE_DOWNLOADS_IMPORT_ROOT: /imports/downloads
     ports:
       - "127.0.0.1:8787:8787"
     restart: unless-stopped
     volumes:
       - ${SAGE_DATA_ROOT:?Set SAGE_DATA_ROOT in .env}:/var/lib/sage
+      - ${SAGE_DOWNLOADS_HOST_PATH:?Set SAGE_DOWNLOADS_HOST_PATH in .env}:/imports/downloads:ro
 
   n8n:
     image: n8nio/n8n:2.37.10

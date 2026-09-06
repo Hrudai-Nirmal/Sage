@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
+from sage_core.document_state import DocumentStateRepository
 from sage_core.system_state import SystemStateRepository
 
 
@@ -57,8 +58,17 @@ class SystemModePayload(BaseModel):
     mode: Literal["NORMAL", "ECO", "SLEEP", "SHUTDOWN"]
 
 
+class DocumentImportPayload(BaseModel):
+    """Specify a file relative to one Core-configured import root."""
+
+    relativePath: str = Field(min_length=1, max_length=2_000)
+    sourceRoot: str = Field(min_length=1, max_length=100)
+
+
 def createApp(
     databasePath: Path,
+    dataRoot: Path | None = None,
+    importRoots: dict[str, Path] | None = None,
     operatorToken: str = "",
     proposalToken: str = "",
     approvalToken: str = "",
@@ -67,8 +77,14 @@ def createApp(
     if not isinstance(databasePath, Path):
         raise TypeError("databasePath must be a pathlib.Path")
 
+    managedDataRoot = dataRoot or databasePath.parent.parent
     database = SageDatabase(databasePath)
     approvalStateRepository = ApprovalStateRepository(database)
+    documentStateRepository = DocumentStateRepository(
+        database=database,
+        dataRoot=managedDataRoot,
+        importRoots=importRoots or {},
+    )
     systemStateRepository = SystemStateRepository(database)
     app = FastAPI(title="Sage Core", version="0.1.0")
 
@@ -138,6 +154,28 @@ def createApp(
     def listAuditEvents() -> list[dict[str, str]]:
         """List durable audit summaries for the local operator interface."""
         return approvalStateRepository.listAuditEvents()
+
+    @app.post("/v1/documents/imports", status_code=status.HTTP_201_CREATED)
+    def importDocument(
+        documentImport: DocumentImportPayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, str]:
+        """Copy one permitted file into Sage's managed archive without changing its source."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return documentStateRepository.importDocument(
+                relativePath=documentImport.relativePath,
+                sourceRoot=documentImport.sourceRoot,
+            )
+        except FileNotFoundError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+
+    @app.get("/v1/documents")
+    def listDocuments() -> list[dict[str, str]]:
+        """List documents from Sage's SQLite registry rather than the filesystem."""
+        return documentStateRepository.listDocuments()
 
     return app
 

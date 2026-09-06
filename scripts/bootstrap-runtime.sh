@@ -59,7 +59,12 @@ if [[ ! -f "${sageProjectRoot}/.env" ]]; then
     print "SAGE_DATA_ROOT=${sageDataRoot}"
     print "SAGE_CORE_ENV_FILE=${secretRoot}/core.env"
     print "SAGE_N8N_ENV_FILE=${secretRoot}/n8n.env"
+    print "SAGE_DOWNLOADS_HOST_PATH=/Users/hrudainirmal/Downloads"
     print "TZ=Asia/Kolkata"
   } > "${sageProjectRoot}/.env"
   chmod 600 "${sageProjectRoot}/.env"
+fi
+
+if ! grep -q '^SAGE_DOWNLOADS_HOST_PATH=' "${sageProjectRoot}/.env"; then
+  print "SAGE_DOWNLOADS_HOST_PATH=/Users/hrudainirmal/Downloads" >> "${sageProjectRoot}/.env"
 fi

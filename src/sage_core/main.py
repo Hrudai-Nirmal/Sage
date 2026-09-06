@@ -15,7 +15,11 @@ def createConfiguredApp() -> FastAPI:
     dataRoot = _getRequiredEnvironmentPath("SAGE_DATA_ROOT")
     return createApp(
         approvalToken=_getRequiredEnvironmentValue("SAGE_APPROVAL_TOKEN"),
+        dataRoot=dataRoot,
         databasePath=dataRoot / "database" / "sage.db",
+        importRoots={
+            "downloads": _getRequiredEnvironmentPath("SAGE_DOWNLOADS_IMPORT_ROOT"),
+        },
         operatorToken=_getRequiredEnvironmentValue("SAGE_OPERATOR_TOKEN"),
         proposalToken=_getRequiredEnvironmentValue("SAGE_PROPOSAL_TOKEN"),
     )

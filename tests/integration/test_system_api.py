@@ -214,6 +214,9 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
     """A deployed Core service must not depend on settings committed to Git."""
     monkeypatch.setenv("SAGE_APPROVAL_TOKEN", "approval-token")
     monkeypatch.setenv("SAGE_DATA_ROOT", str(tmp_path))
+    downloadsRoot = tmp_path / "Downloads"
+    downloadsRoot.mkdir()
+    monkeypatch.setenv("SAGE_DOWNLOADS_IMPORT_ROOT", str(downloadsRoot))
     monkeypatch.setenv("SAGE_OPERATOR_TOKEN", "operator-token")
     monkeypatch.setenv("SAGE_PROPOSAL_TOKEN", "proposal-token")
 
@@ -366,3 +369,34 @@ def testShutsDownSageStateWithoutDeletingDurableData(tmp_path):
     assert shutdownProcess.returncode == 0
     assert not expiredFile.exists()
     assert durableDocument.exists()
+
+
+def testImportsDownloadsCopyIntoManagedRegistryWithoutTouchingSource(tmp_path):
+    """Sage may copy an allowed file, but must never mutate the external original."""
+    sourceRoot = tmp_path / "Downloads"
+    sourceRoot.mkdir()
+    sourceDocument = sourceRoot / "receipt.txt"
+    sourceDocument.write_text("Receipt 42")
+    dataRoot = tmp_path / "SageData"
+    app = createApp(
+        dataRoot=dataRoot,
+        databasePath=dataRoot / "database" / "sage.db",
+        importRoots={"downloads": sourceRoot},
+        proposalToken="proposal-token",
+    )
+
+    with TestClient(app) as client:
+        importResponse = client.post(
+            "/v1/documents/imports",
+            json={"relativePath": "receipt.txt", "sourceRoot": "downloads"},
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+        )
+
+        assert importResponse.status_code == 201
+        importedDocument = importResponse.json()
+        registry = client.get("/v1/documents").json()
+
+    assert sourceDocument.read_text() == "Receipt 42"
+    assert Path(importedDocument["path"]).read_text() == "Receipt 42"
+    assert Path(importedDocument["path"]).parent == dataRoot / "documents" / "general"
+    assert registry == [importedDocument]

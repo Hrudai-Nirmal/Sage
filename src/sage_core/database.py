@@ -77,6 +77,17 @@ class SageDatabase:
                     status TEXT NOT NULL,
                     metadata_json TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    canonical_name TEXT NOT NULL,
+                    original_name TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    source_root TEXT NOT NULL,
+                    source_relative_path TEXT NOT NULL,
+                    checksum TEXT NOT NULL UNIQUE,
+                    imported_at TEXT NOT NULL
+                );
                 """
             )
             self._addTaskColumnIfMissing(connection, "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")
