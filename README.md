@@ -38,6 +38,12 @@ scripts/install-launchd.sh
 
 This registers separate user launch agents for Sage on port `18080` and Iris on port `18081`. Both bind only to loopback and require the private model-server token.
 
+The same installer registers a daily 03:15 IST maintenance agent. It removes only temporary files older than seven days and resets the in-memory cache of either active model server. To stop Sage cleanly without deleting its personal state:
+
+```zsh
+scripts/shutdown-sage.sh
+```
+
 ## Verification
 
 ```zsh
@@ -50,3 +56,4 @@ This registers separate user launch agents for Sage on port `18080` and Iris on 
 - Task, case, skill, and workflow changes are designed to use one-time user approvals. Core distinguishes the agent proposal channel from the approval channel.
 - Secrets have mode `0600` under `/Users/hrudainirmal/SageData/secrets` and are not tracked by Git.
 - Model services and Docker application ports are loopback-only.
+- A model server never starts when its reserved port belongs to another process; a matching existing server is reused instead of duplicated.
