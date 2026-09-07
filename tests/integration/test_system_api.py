@@ -343,6 +343,7 @@ def testConfiguresTelegramSettingsWithoutPrintingBotCredential(tmp_path):
     secretRoot.mkdir(parents=True)
     telegramFile = secretRoot / "telegram.env"
     telegramFile.write_text("TELEGRAM_BOT_TOKEN=private-token\n")
+    (secretRoot / "core.env").write_text("SAGE_TELEGRAM_INGRESS_TOKEN=ingress-token\n")
     repositoryRoot = Path(__file__).parents[2]
 
     configureProcess = run(
@@ -371,6 +372,7 @@ def testConfiguresTelegramSettingsWithoutPrintingBotCredential(tmp_path):
     assert configureProcess.returncode == 0
     assert "private-token" not in configureProcess.stdout
     assert "TELEGRAM_BOT_TOKEN=private-token" in telegramFile.read_text()
+    assert "SAGE_TELEGRAM_INGRESS_TOKEN=ingress-token" in telegramFile.read_text()
     assert "SAGE_TELEGRAM_MAIN_TOPIC_ID=5" in telegramFile.read_text()
     assert telegramFile.stat().st_mode & 0o077 == 0
 

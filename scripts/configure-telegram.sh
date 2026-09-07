@@ -5,6 +5,7 @@ set -euo pipefail
 sageDataRoot="${SAGE_DATA_ROOT:-/Users/hrudainirmal/SageData}"
 secretRoot="${sageDataRoot}/secrets"
 telegramFile="${secretRoot}/telegram.env"
+coreFile="${secretRoot}/core.env"
 
 allowedUserId=""
 chatId=""
@@ -35,11 +36,17 @@ if [[ ! -f "${telegramFile}" ]] || ! /usr/bin/grep -q '^TELEGRAM_BOT_TOKEN=.' "$
   exit 78
 fi
 
+if [[ ! -f "${coreFile}" ]] || ! /usr/bin/grep -q '^SAGE_TELEGRAM_INGRESS_TOKEN=.' "${coreFile}"; then
+  print -u2 "Missing SAGE_TELEGRAM_INGRESS_TOKEN in ${coreFile}"
+  exit 78
+fi
+
 umask 077
 temporaryFile="$(/usr/bin/mktemp "${secretRoot}/telegram.env.XXXXXX")"
 trap '/bin/rm -f "${temporaryFile}"' EXIT
 
 /usr/bin/awk -F= '$1 == "TELEGRAM_BOT_TOKEN" { print; exit }' "${telegramFile}" > "${temporaryFile}"
+/usr/bin/awk -F= '$1 == "SAGE_TELEGRAM_INGRESS_TOKEN" { print; exit }' "${coreFile}" >> "${temporaryFile}"
 {
   print "SAGE_TELEGRAM_ALLOWED_USER_ID=${allowedUserId}"
   print "SAGE_TELEGRAM_CHAT_ID=${chatId}"
