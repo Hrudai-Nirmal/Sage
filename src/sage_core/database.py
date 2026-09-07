@@ -102,6 +102,8 @@ class SageDatabase:
             self._addTaskColumnIfMissing(connection, "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")
             self._addTaskColumnIfMissing(connection, "due_at", "TEXT")
             self._addTaskColumnIfMissing(connection, "recurrence", "TEXT")
+            self._addTelegramColumnIfMissing(connection, "dispatch_status", "TEXT NOT NULL DEFAULT 'PENDING'")
+            self._addTelegramColumnIfMissing(connection, "reply_text", "TEXT")
 
     def _addTaskColumnIfMissing(
         self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
@@ -113,3 +115,14 @@ class SageDatabase:
         }
         if columnName not in taskColumns:
             connection.execute(f"ALTER TABLE tasks ADD COLUMN {columnName} {columnDefinition}")
+
+    def _addTelegramColumnIfMissing(
+        self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
+    ) -> None:
+        """Add dispatcher state without discarding previously received Telegram messages."""
+        messageColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute("PRAGMA table_info(telegram_messages)").fetchall()
+        }
+        if columnName not in messageColumns:
+            connection.execute(f"ALTER TABLE telegram_messages ADD COLUMN {columnName} {columnDefinition}")

@@ -65,6 +65,7 @@ if [[ ! -f "${sageProjectRoot}/.env" ]]; then
     print "SAGE_CORE_ENV_FILE=${secretRoot}/core.env"
     print "SAGE_N8N_ENV_FILE=${secretRoot}/n8n.env"
     print "SAGE_TELEGRAM_ENV_FILE=${secretRoot}/telegram.env"
+    print "SAGE_MODEL_SERVER_ENV_FILE=${secretRoot}/model-server.env"
     print "SAGE_DOWNLOADS_HOST_PATH=/Users/hrudainirmal/Downloads"
     print "TZ=Asia/Kolkata"
   } > "${sageProjectRoot}/.env"
@@ -77,4 +78,8 @@ fi
 
 if ! grep -q '^SAGE_TELEGRAM_ENV_FILE=' "${sageProjectRoot}/.env"; then
   print "SAGE_TELEGRAM_ENV_FILE=${secretRoot}/telegram.env" >> "${sageProjectRoot}/.env"
+fi
+
+if ! grep -q '^SAGE_MODEL_SERVER_ENV_FILE=' "${sageProjectRoot}/.env"; then
+  print "SAGE_MODEL_SERVER_ENV_FILE=${secretRoot}/model-server.env" >> "${sageProjectRoot}/.env"
 fi

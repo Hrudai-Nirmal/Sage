@@ -107,17 +107,16 @@
       ]
     },
     {
-      "parameters": {
-        "jsCode": "const workflowState = $getWorkflowStaticData('global');\nif (typeof workflowState.pendingUpdateOffset === 'number') {\n  workflowState.nextUpdateOffset = workflowState.pendingUpdateOffset;\n  delete workflowState.pendingUpdateOffset;\n}\nreturn $input.all();"
-      },
-      "id": "9325a7cb-4b3a-429a-857c-cbf3fdc28636",
-      "name": "Commit Telegram Offset",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1200,
-        0
-      ]
+      "parameters": {"method": "POST", "url": "http://host.docker.internal:18080/v1/chat/completions", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "Authorization", "value": "={{ 'Bearer ' + $env.SAGE_MODEL_API_KEY }}"}]}, "sendBody": true, "contentType": "json", "specifyBody": "json", "jsonBody": "={{ { model: '/Users/hrudainirmal/SageData/models/qwen3.5-9b-6bit', messages: [{ role: 'system', content: 'You are Sage, a concise personal assistant. Reply helpfully, but never claim to have created tasks, cases, skills, workflows, sent emails, or modified files. Those actions require separate approval.' }, { role: 'user', content: $('Filter Sage Messages').item.json.text }], max_tokens: 512, temperature: 0.7 } }}", "options": {}},
+      "id": "e6e0351c-231c-4d88-960e-9b833b014cee", "name": "Ask Sage", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "disabled": true, "position": [1200, 0]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/sendMessage' }}", "sendBody": true, "contentType": "form-urlencoded", "specifyBody": "keypair", "bodyParameters": {"parameters": [{"name": "chat_id", "value": "={{ $('Filter Sage Messages').item.json.chatId }}"}, {"name": "message_thread_id", "value": "={{ $('Filter Sage Messages').item.json.messageThreadId }}"}, {"name": "text", "value": "={{ $json.choices[0].message.content }}"}]}, "options": {}},
+      "id": "e956a792-d3ac-467a-a5ed-b91e0a4d0064", "name": "Reply in Main Topic", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "disabled": true, "position": [1440, 0]
+    },
+    {
+      "parameters": {"jsCode": "const workflowState = $getWorkflowStaticData('global');\nif (typeof workflowState.pendingUpdateOffset === 'number') {\n  workflowState.nextUpdateOffset = workflowState.pendingUpdateOffset;\n  delete workflowState.pendingUpdateOffset;\n}\nreturn $input.all();"},
+      "id": "9325a7cb-4b3a-429a-857c-cbf3fdc28636", "name": "Commit Telegram Offset", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1680, 0]
     }
   ],
   "connections": {
@@ -169,13 +168,15 @@
       "main": [
         [
           {
-            "node": "Commit Telegram Offset",
+            "node": "Ask Sage",
             "type": "main",
             "index": 0
           }
         ]
       ]
     }
+    ,"Ask Sage": {"main": [[{"node": "Reply in Main Topic", "type": "main", "index": 0}]]}
+    ,"Reply in Main Topic": {"main": [[{"node": "Commit Telegram Offset", "type": "main", "index": 0}]]}
   },
   "settings": {
     "executionOrder": "v1"
