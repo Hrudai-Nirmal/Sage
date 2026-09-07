@@ -76,6 +76,12 @@ class TelegramMessagePayload(BaseModel):
     text: str = Field(min_length=1, max_length=10_000)
 
 
+class TelegramApprovalPayload(BaseModel):
+    """Validate the Telegram account that pressed an approval callback."""
+
+    senderId: int = Field(ge=1)
+
+
 def createApp(
     databasePath: Path,
     dataRoot: Path | None = None,
@@ -218,6 +224,26 @@ def createApp(
             response.status_code = status.HTTP_200_OK
             return {"status": "DUPLICATE", "topic": topicName}
         return {"status": "ACCEPTED", "topic": topicName}
+
+    @app.post("/v1/telegram/approval-requests/{approvalId}/confirm")
+    def confirmTelegramApprovalRequest(
+        approvalId: str,
+        approvalPayload: TelegramApprovalPayload,
+        sageApprovalToken: str = Header(alias="X-Sage-Approval-Token"),
+    ) -> dict[str, str]:
+        """Confirm one proposal only when the configured Telegram user pressed the callback."""
+        _validateToken(sageApprovalToken, approvalToken)
+        if telegramAllowedUserId is None or approvalPayload.senderId != telegramAllowedUserId:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Telegram sender is not allowlisted")
+        try:
+            return approvalStateRepository.confirmProposal(
+                approvalId=approvalId,
+                approvedBy=f"telegram:{approvalPayload.senderId}",
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except (TimeoutError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
     return app
 

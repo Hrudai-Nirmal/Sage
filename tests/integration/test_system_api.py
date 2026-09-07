@@ -309,6 +309,30 @@ def testAcceptsOnlyAllowlistedTelegramMessagesFromConfiguredForumTopics(tmp_path
     assert duplicateResponse.json() == {"status": "DUPLICATE", "topic": "MAIN"}
 
 
+def testConfirmsApprovalOnlyForConfiguredTelegramUser(tmp_path):
+    """A Telegram callback must identify the sole approved human before state changes."""
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=tmp_path / "sage.db",
+        proposalToken="proposal-token",
+        telegramAllowedUserId=8961856168,
+    )
+    with TestClient(app) as client:
+        proposal = client.post(
+            "/v1/approval-requests",
+            json={"actionType": "CREATE_TASK", "payload": {"title": "Telegram approval"}},
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+        ).json()
+        response = client.post(
+            f"/v1/telegram/approval-requests/{proposal['id']}/confirm",
+            json={"senderId": 8961856168},
+            headers={"X-Sage-Approval-Token": "approval-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "APPROVED"
+
+
 def testBootstrapsManagedDataRootAndPrivateCredentials(tmp_path):
     """First-run setup must create a safe layout without writing secrets into Git."""
     dataRoot = tmp_path / "SageData"
