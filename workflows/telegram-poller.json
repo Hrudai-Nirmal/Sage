@@ -1,0 +1,183 @@
+{
+  "name": "Sage Telegram Poller",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "a4f37075-6bf9-4055-aad8-0d09bfb4b2ab",
+      "name": "Poll Every 30 Seconds",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const workflowState = $getWorkflowStaticData('global');\nreturn [{ json: { offset: workflowState.nextUpdateOffset ?? 0 } }];"
+      },
+      "id": "014143bd-e342-4dce-8f16-8e173e8124f1",
+      "name": "Load Telegram Offset",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/getUpdates' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "offset",
+              "value": "={{ $json.offset }}"
+            },
+            {
+              "name": "timeout",
+              "value": "0"
+            },
+            {
+              "name": "allowed_updates",
+              "value": "[\"message\"]"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6473176-2faa-49b4-b6a6-d4492c5ed218",
+      "name": "Fetch Telegram Updates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const telegramResponse = $input.first().json;\nconst updates = Array.isArray(telegramResponse.result) ? telegramResponse.result : [];\nconst configuredUserId = Number($env.SAGE_TELEGRAM_ALLOWED_USER_ID);\nconst configuredChatId = Number($env.SAGE_TELEGRAM_CHAT_ID);\nconst configuredTopicIds = new Set([\n  Number($env.SAGE_TELEGRAM_MAIN_TOPIC_ID),\n  Number($env.SAGE_TELEGRAM_REPORTS_TOPIC_ID),\n  Number($env.SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID),\n]);\nconst latestUpdateId = updates.reduce((latestId, update) => Math.max(latestId, Number(update.update_id) || 0), 0);\nconst messages = updates.flatMap((update) => {\n  const message = update.message;\n  if (!message || typeof message.text !== 'string') return [];\n  if (message.from?.id !== configuredUserId || message.chat?.id !== configuredChatId) return [];\n  if (!configuredTopicIds.has(message.message_thread_id)) return [];\n  return [{\n    json: {\n      chatId: message.chat.id,\n      messageId: message.message_id,\n      messageThreadId: message.message_thread_id,\n      senderId: message.from.id,\n      text: message.text,\n    },\n  }];\n});\nconst workflowState = $getWorkflowStaticData('global');\nif (latestUpdateId > 0) {\n  if (messages.length === 0) {\n    workflowState.nextUpdateOffset = latestUpdateId + 1;\n    delete workflowState.pendingUpdateOffset;\n  } else {\n    workflowState.pendingUpdateOffset = latestUpdateId + 1;\n  }\n}\nreturn messages;"
+      },
+      "id": "e4368bf2-3b9e-4421-a683-f094e49ecbbc",
+      "name": "Filter Sage Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://sage-core:8787/v1/telegram/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Sage-Telegram-Ingress-Token",
+              "value": "={{ $env.SAGE_TELEGRAM_INGRESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "5b13e973-5303-4b7b-a822-4c6a4951f2a6",
+      "name": "Forward to Sage Core",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const workflowState = $getWorkflowStaticData('global');\nif (typeof workflowState.pendingUpdateOffset === 'number') {\n  workflowState.nextUpdateOffset = workflowState.pendingUpdateOffset;\n  delete workflowState.pendingUpdateOffset;\n}\nreturn $input.all();"
+      },
+      "id": "9325a7cb-4b3a-429a-857c-cbf3fdc28636",
+      "name": "Commit Telegram Offset",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Poll Every 30 Seconds": {
+      "main": [
+        [
+          {
+            "node": "Load Telegram Offset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Telegram Offset": {
+      "main": [
+        [
+          {
+            "node": "Fetch Telegram Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Telegram Updates": {
+      "main": [
+        [
+          {
+            "node": "Filter Sage Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Sage Messages": {
+      "main": [
+        [
+          {
+            "node": "Forward to Sage Core",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to Sage Core": {
+      "main": [
+        [
+          {
+            "node": "Commit Telegram Offset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

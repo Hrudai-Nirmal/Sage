@@ -24,3 +24,5 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Daily maintenance clears only Sage temporary artifacts older than seven days and model-server memory caches; it does not delete documents, databases, model weights, or backup data.
 - Tasks are approval-created and initially support title, notes, priority, due timestamp, and recurrence. New schema columns are added without dropping existing SQLite task data.
 - Telegram delivery is at-least-once: Core records each Telegram message ID once and returns a successful duplicate acknowledgement for safe n8n retries.
+- The versioned n8n Telegram poller runs every 30 seconds, filters incoming updates against runtime allowlists, and commits its Bot API offset only after Core accepts the batch.
+- n8n permits workflow environment access only because the local poller must read its private bot and Core-ingress credentials; approval credentials are isolated in Core's separate environment file.

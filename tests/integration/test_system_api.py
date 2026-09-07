@@ -375,6 +375,15 @@ def testConfiguresTelegramSettingsWithoutPrintingBotCredential(tmp_path):
     assert telegramFile.stat().st_mode & 0o077 == 0
 
 
+def testAllowsLocalN8nWorkflowAccessToItsRuntimeCredentials():
+    """The local poller needs its private runtime credentials without embedding them in JSON."""
+    repositoryRoot = Path(__file__).parents[2]
+
+    composeDefinition = (repositoryRoot / "docker-compose.yml").read_text()
+
+    assert 'N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"' in composeDefinition
+
+
 def testPreventsSecondModelServerWhenItsReservedPortIsOccupied(tmp_path):
     """A foreign or stale process must block a second Sage model instance."""
     dataRoot = tmp_path / "SageData"

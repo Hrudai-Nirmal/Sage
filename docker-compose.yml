@@ -26,6 +26,8 @@ services:
       - ${SAGE_TELEGRAM_ENV_FILE:?Set SAGE_TELEGRAM_ENV_FILE in .env}
     environment:
       GENERIC_TIMEZONE: ${TZ:-Asia/Kolkata}
+      # The local poller reads only its private runtime values; no secret is versioned in workflows.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       N8N_HOST: 127.0.0.1
