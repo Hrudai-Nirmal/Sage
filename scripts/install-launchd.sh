@@ -19,6 +19,9 @@ for agentName in com.sage.model-sage com.sage.model-iris com.sage.telegram-dispa
   renderedTemplate="$(sed -e "s|__SAGE_PROJECT_ROOT__|${sageProjectRoot}|g" -e "s|__SAGE_DATA_ROOT__|${sageDataRoot}|g" "${templatePath}")"
   print -r -- "${renderedTemplate}" > "${destinationPath}"
   plutil -lint "${destinationPath}"
-  launchctl bootout "gui/${UID}/${agentName}" 2>/dev/null || true
-  launchctl bootstrap "gui/${UID}" "${destinationPath}"
+  if launchctl print "gui/${UID}/${agentName}" >/dev/null 2>&1; then
+    launchctl kickstart -k "gui/${UID}/${agentName}"
+  else
+    launchctl bootstrap "gui/${UID}" "${destinationPath}"
+  fi
 done

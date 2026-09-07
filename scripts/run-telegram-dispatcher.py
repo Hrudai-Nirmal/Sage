@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -16,6 +17,7 @@ DATABASE_PATH = DATA_ROOT / "database" / "sage.db"
 MODEL_URL = "http://127.0.0.1:18080/v1/chat/completions"
 MODEL_ID = str(DATA_ROOT / "models" / "qwen3.5-9b-6bit")
 CORE_URL = "http://127.0.0.1:8787"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
 def getSecretValues() -> dict[str, str]:
@@ -171,7 +173,8 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
             )
             replyText = str(modelResponse["choices"][0]["message"]["content"])
             sendTelegramMessage(secrets, replyText)
-    except Exception:
+    except Exception as error:
+        logging.error("Telegram message dispatch failed: %s", type(error).__name__)
         with sqlite3.connect(DATABASE_PATH) as connection:
             connection.execute("UPDATE telegram_messages SET dispatch_status = 'PENDING' WHERE message_id = ?", (messageId,))
         return False
@@ -184,8 +187,11 @@ def main() -> None:
     """Keep exactly one dispatcher loop alive under launchd supervision."""
     secrets = getSecretValues()
     while True:
-        dispatchNextCallback(secrets)
-        dispatchNextMessage(secrets)
+        try:
+            dispatchNextCallback(secrets)
+            dispatchNextMessage(secrets)
+        except Exception as error:
+            logging.error("Telegram dispatcher iteration failed: %s", type(error).__name__)
         time.sleep(3)
 
 
