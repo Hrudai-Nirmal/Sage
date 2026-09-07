@@ -128,6 +128,35 @@ class ApprovalStateRepository:
 
         return {"id": approvalId, "status": "APPROVED"}
 
+    def declineProposal(self, approvalId: str, declinedBy: str) -> dict[str, str]:
+        """Close one pending proposal without materializing the proposed personal state."""
+        with self.database.connectDatabase() as connection:
+            approvalRow = connection.execute(
+                "SELECT action_type, expires_at, status FROM approval_requests WHERE id = ?",
+                (approvalId,),
+            ).fetchone()
+            if approvalRow is None:
+                raise LookupError("Approval request was not found")
+            actionType, expiresAt, approvalStatus = approvalRow
+            if approvalStatus != "PENDING":
+                raise ValueError("Approval request cannot be declined")
+            if datetime.fromisoformat(expiresAt) <= datetime.now(UTC):
+                raise TimeoutError("Approval request has expired")
+            connection.execute(
+                "UPDATE approval_requests SET status = 'DECLINED', approved_by = ? WHERE id = ? AND status = 'PENDING'",
+                (declinedBy, approvalId),
+            )
+            self.auditStateRepository.recordEvent(
+                actionType=actionType,
+                actor=declinedBy,
+                connection=connection,
+                eventStatus="DECLINED",
+                metadata={"approvalId": approvalId},
+                targetId=approvalId,
+                targetType="approval_request",
+            )
+        return {"id": approvalId, "status": "DECLINED"}
+
     def listTasks(self) -> list[dict[str, str | None]]:
         """Return user tasks without exposing internal approval implementation details."""
         with self.database.connectDatabase() as connection:

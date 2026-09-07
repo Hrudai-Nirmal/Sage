@@ -50,7 +50,7 @@
             },
             {
               "name": "allowed_updates",
-              "value": "[\"message\"]"
+              "value": "[\"message\",\"callback_query\"]"
             }
           ]
         },
@@ -67,7 +67,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const telegramResponse = $input.first().json;\nconst updates = Array.isArray(telegramResponse.result) ? telegramResponse.result : [];\nconst configuredUserId = Number($env.SAGE_TELEGRAM_ALLOWED_USER_ID);\nconst configuredChatId = Number($env.SAGE_TELEGRAM_CHAT_ID);\nconst configuredTopicIds = new Set([\n  Number($env.SAGE_TELEGRAM_MAIN_TOPIC_ID),\n  Number($env.SAGE_TELEGRAM_REPORTS_TOPIC_ID),\n  Number($env.SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID),\n]);\nconst latestUpdateId = updates.reduce((latestId, update) => Math.max(latestId, Number(update.update_id) || 0), 0);\nconst messages = updates.flatMap((update) => {\n  const message = update.message;\n  if (!message || typeof message.text !== 'string') return [];\n  if (message.from?.id !== configuredUserId || message.chat?.id !== configuredChatId) return [];\n  if (!configuredTopicIds.has(message.message_thread_id)) return [];\n  return [{\n    json: {\n      chatId: message.chat.id,\n      messageId: message.message_id,\n      messageThreadId: message.message_thread_id,\n      senderId: message.from.id,\n      text: message.text,\n    },\n  }];\n});\nconst workflowState = $getWorkflowStaticData('global');\nif (latestUpdateId > 0) {\n  if (messages.length === 0) {\n    workflowState.nextUpdateOffset = latestUpdateId + 1;\n    delete workflowState.pendingUpdateOffset;\n  } else {\n    workflowState.pendingUpdateOffset = latestUpdateId + 1;\n  }\n}\nreturn messages;"
+        "jsCode": "const telegramResponse = $input.first().json;\nconst updates = Array.isArray(telegramResponse.result) ? telegramResponse.result : [];\nconst configuredUserId = Number($env.SAGE_TELEGRAM_ALLOWED_USER_ID);\nconst configuredChatId = Number($env.SAGE_TELEGRAM_CHAT_ID);\nconst configuredTopicIds = new Set([Number($env.SAGE_TELEGRAM_MAIN_TOPIC_ID), Number($env.SAGE_TELEGRAM_REPORTS_TOPIC_ID), Number($env.SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID)]);\nconst latestUpdateId = updates.reduce((latestId, update) => Math.max(latestId, Number(update.update_id) || 0), 0);\nconst messages = updates.flatMap((update) => {\n  const callback = update.callback_query;\n  if (callback?.message && callback.from?.id === configuredUserId && callback.message.chat?.id === configuredChatId && configuredTopicIds.has(callback.message.message_thread_id)) {\n    return [{ json: { endpoint: '/v1/telegram/callbacks', payload: { callbackId: callback.id, chatId: callback.message.chat.id, data: callback.data, messageThreadId: callback.message.message_thread_id, senderId: callback.from.id } } }];\n  }\n  const message = update.message;\n  if (!message || typeof message.text !== 'string') return [];\n  if (message.from?.id !== configuredUserId || message.chat?.id !== configuredChatId) return [];\n  if (!configuredTopicIds.has(message.message_thread_id)) return [];\n  return [{ json: { endpoint: '/v1/telegram/messages', payload: { chatId: message.chat.id, messageId: message.message_id, messageThreadId: message.message_thread_id, senderId: message.from.id, text: message.text } } }];\n});\nconst workflowState = $getWorkflowStaticData('global');\nif (latestUpdateId > 0) {\n  if (messages.length === 0) { workflowState.nextUpdateOffset = latestUpdateId + 1; delete workflowState.pendingUpdateOffset; }\n  else { workflowState.pendingUpdateOffset = latestUpdateId + 1; }\n}\nreturn messages;"
       },
       "id": "e4368bf2-3b9e-4421-a683-f094e49ecbbc",
       "name": "Filter Sage Messages",
@@ -81,7 +81,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://sage-core:8787/v1/telegram/messages",
+        "url": "={{ 'http://sage-core:8787' + $json.endpoint }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -94,7 +94,7 @@
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={{ $json }}",
+        "jsonBody": "={{ $json.payload }}",
         "options": {}
       },
       "id": "5b13e973-5303-4b7b-a822-4c6a4951f2a6",

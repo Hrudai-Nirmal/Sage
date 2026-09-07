@@ -26,3 +26,5 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Telegram delivery is at-least-once: Core records each Telegram message ID once and returns a successful duplicate acknowledgement for safe n8n retries.
 - The versioned n8n Telegram poller runs every 30 seconds, filters incoming updates against runtime allowlists, and commits its Bot API offset only after Core accepts the batch.
 - n8n permits workflow environment access only because the local poller must read its private bot and Core-ingress credentials; `configure-telegram.sh` copies only the ingress credential, never the independent approval credentials, into n8n's Telegram environment.
+- Telegram task and case commands create proposals only: `/task <title>` and `/case <title> | <objective>`. Inline callbacks are allowlisted and deduplicated before the native dispatcher uses Core's isolated approval credential.
+- Declining a proposal atomically closes and audits it without creating a task or case.

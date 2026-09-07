@@ -19,6 +19,17 @@ class TelegramMessage:
     text: str
 
 
+@dataclass(frozen=True)
+class TelegramCallback:
+    """Represent one normalized Telegram inline-button callback."""
+
+    callbackId: str
+    chatId: int
+    data: str
+    messageThreadId: int
+    senderId: int
+
+
 class TelegramStateRepository:
     """Enforce a single-user forum boundary before persisting an inbound message."""
 
@@ -56,6 +67,35 @@ class TelegramStateRepository:
                 ),
             )
         return topicName, insertResult.rowcount == 1
+
+    def acceptCallback(self, callback: TelegramCallback) -> bool:
+        """Validate and store an approval callback, returning whether it was newly accepted."""
+        if self.allowedUserId is None or callback.senderId != self.allowedUserId:
+            raise PermissionError("Telegram sender is not allowlisted")
+        if self.chatId is None or callback.chatId != self.chatId:
+            raise PermissionError("Telegram chat is not allowlisted")
+        if callback.messageThreadId not in self.topicNamesById:
+            raise PermissionError("Telegram forum topic is not allowlisted")
+        action, separator, approvalId = callback.data.partition(":")
+        if separator != ":" or action not in {"approve", "decline"} or len(approvalId) != 36:
+            raise ValueError("Telegram callback action is invalid")
+        with self.database.connectDatabase() as connection:
+            insertResult = connection.execute(
+                """INSERT OR IGNORE INTO telegram_callbacks (
+                    callback_id, approval_id, action, chat_id, message_thread_id,
+                    sender_id, status, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)""",
+                (
+                    callback.callbackId,
+                    approvalId,
+                    action.upper(),
+                    callback.chatId,
+                    callback.messageThreadId,
+                    callback.senderId,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+        return insertResult.rowcount == 1
 
     def _validateMessage(self, message: TelegramMessage) -> None:
         """Reject incomplete integration configuration and every non-allowlisted message."""

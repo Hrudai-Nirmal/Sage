@@ -333,6 +333,72 @@ def testConfirmsApprovalOnlyForConfiguredTelegramUser(tmp_path):
     assert response.json()["status"] == "APPROVED"
 
 
+def testDeclinesProposalWithoutCreatingTask(tmp_path):
+    """Declining a proposal must close it without materializing personal state."""
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=tmp_path / "sage.db",
+        proposalToken="proposal-token",
+        telegramAllowedUserId=8961856168,
+    )
+    with TestClient(app) as client:
+        proposal = client.post(
+            "/v1/approval-requests",
+            json={"actionType": "CREATE_TASK", "payload": {"title": "Do not create"}},
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+        ).json()
+        response = client.post(
+            f"/v1/telegram/approval-requests/{proposal['id']}/decline",
+            json={"senderId": 8961856168},
+            headers={"X-Sage-Approval-Token": "approval-token"},
+        )
+
+        assert client.get("/v1/tasks").json() == []
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "DECLINED"
+
+
+def testAcceptsTelegramApprovalCallbackOnlyOnce(tmp_path):
+    """Telegram callback retries must be harmless and foreign callback actors rejected."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        telegramAllowedUserId=8961856168,
+        telegramChatId=-1004370918853,
+        telegramIngressToken="ingress-token",
+        telegramTopicIds={"MAIN": 5},
+    )
+    payload = {
+        "callbackId": "callback-1",
+        "chatId": -1004370918853,
+        "data": "approve:00000000-0000-0000-0000-000000000001",
+        "messageThreadId": 5,
+        "senderId": 8961856168,
+    }
+    with TestClient(app) as client:
+        accepted = client.post(
+            "/v1/telegram/callbacks",
+            json=payload,
+            headers={"X-Sage-Telegram-Ingress-Token": "ingress-token"},
+        )
+        duplicate = client.post(
+            "/v1/telegram/callbacks",
+            json=payload,
+            headers={"X-Sage-Telegram-Ingress-Token": "ingress-token"},
+        )
+        foreign = client.post(
+            "/v1/telegram/callbacks",
+            json={**payload, "callbackId": "callback-2", "senderId": 999},
+            headers={"X-Sage-Telegram-Ingress-Token": "ingress-token"},
+        )
+
+    assert accepted.status_code == 201
+    assert accepted.json()["status"] == "ACCEPTED"
+    assert duplicate.status_code == 200
+    assert duplicate.json()["status"] == "DUPLICATE"
+    assert foreign.status_code == 403
+
+
 def testBootstrapsManagedDataRootAndPrivateCredentials(tmp_path):
     """First-run setup must create a safe layout without writing secrets into Git."""
     dataRoot = tmp_path / "SageData"

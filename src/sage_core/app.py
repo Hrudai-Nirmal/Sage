@@ -13,7 +13,7 @@ from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
 from sage_core.document_state import DocumentStateRepository
 from sage_core.system_state import SystemStateRepository
-from sage_core.telegram_state import TelegramMessage, TelegramStateRepository
+from sage_core.telegram_state import TelegramCallback, TelegramMessage, TelegramStateRepository
 
 
 class TaskProposalPayload(BaseModel):
@@ -79,6 +79,16 @@ class TelegramMessagePayload(BaseModel):
 class TelegramApprovalPayload(BaseModel):
     """Validate the Telegram account that pressed an approval callback."""
 
+    senderId: int = Field(ge=1)
+
+
+class TelegramCallbackPayload(BaseModel):
+    """Validate an inline-button callback normalized by n8n."""
+
+    callbackId: str = Field(min_length=1, max_length=200)
+    chatId: int
+    data: str = Field(min_length=1, max_length=64)
+    messageThreadId: int = Field(ge=1)
     senderId: int = Field(ge=1)
 
 
@@ -244,6 +254,47 @@ def createApp(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         except (TimeoutError, ValueError) as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.post("/v1/telegram/approval-requests/{approvalId}/decline")
+    def declineTelegramApprovalRequest(
+        approvalId: str,
+        approvalPayload: TelegramApprovalPayload,
+        sageApprovalToken: str = Header(alias="X-Sage-Approval-Token"),
+    ) -> dict[str, str]:
+        """Decline one proposal only when the configured Telegram user pressed the callback."""
+        _validateToken(sageApprovalToken, approvalToken)
+        if telegramAllowedUserId is None or approvalPayload.senderId != telegramAllowedUserId:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Telegram sender is not allowlisted")
+        try:
+            return approvalStateRepository.declineProposal(
+                approvalId=approvalId,
+                declinedBy=f"telegram:{approvalPayload.senderId}",
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except (TimeoutError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.post("/v1/telegram/callbacks", status_code=status.HTTP_201_CREATED)
+    def acceptTelegramCallback(
+        callbackPayload: TelegramCallbackPayload,
+        response: Response,
+        sageTelegramIngressToken: str = Header(alias="X-Sage-Telegram-Ingress-Token"),
+    ) -> dict[str, str]:
+        """Accept one allowlisted approval callback for native processing."""
+        _validateToken(sageTelegramIngressToken, telegramIngressToken)
+        try:
+            isNewCallback = telegramStateRepository.acceptCallback(
+                TelegramCallback(**callbackPayload.model_dump())
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+        if not isNewCallback:
+            response.status_code = status.HTTP_200_OK
+            return {"status": "DUPLICATE"}
+        return {"status": "ACCEPTED"}
 
     return app
 

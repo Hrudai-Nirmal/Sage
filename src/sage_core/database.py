@@ -97,6 +97,17 @@ class SageDatabase:
                     text TEXT NOT NULL,
                     received_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS telegram_callbacks (
+                    callback_id TEXT PRIMARY KEY,
+                    approval_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    message_thread_id INTEGER NOT NULL,
+                    sender_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    received_at TEXT NOT NULL
+                );
                 """
             )
             self._addTaskColumnIfMissing(connection, "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")
