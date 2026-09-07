@@ -114,6 +114,7 @@ def dispatchNextCallback(secrets: dict[str, str]) -> bool:
             (callbackId,),
         )
     resultLabel = "approved" if action == "APPROVE" else "declined"
+    confirmationText = f"Proposal {resultLabel}."
     try:
         approvalOperation = "confirm" if action == "APPROVE" else "decline"
         postJson(
@@ -124,7 +125,6 @@ def dispatchNextCallback(secrets: dict[str, str]) -> bool:
                 "X-Sage-Approval-Token": secrets["SAGE_APPROVAL_TOKEN"],
             },
         )
-        sendTelegramMessage(secrets, f"Proposal {resultLabel}.")
     except HTTPError as error:
         if error.code != 409:
             with sqlite3.connect(DATABASE_PATH) as connection:
@@ -133,17 +133,24 @@ def dispatchNextCallback(secrets: dict[str, str]) -> bool:
                     (callbackId,),
                 )
             return False
-        sendTelegramMessage(secrets, "That proposal was already handled or expired.")
-    postJson(
-        f"https://api.telegram.org/bot{secrets['TELEGRAM_BOT_TOKEN']}/answerCallbackQuery",
-        {"callback_query_id": callbackId, "text": f"Proposal {resultLabel}."},
-        {"Content-Type": "application/json"},
-    )
+        confirmationText = "That proposal was already handled or expired."
     with sqlite3.connect(DATABASE_PATH) as connection:
         connection.execute(
             "UPDATE telegram_callbacks SET status = 'COMPLETE' WHERE callback_id = ?",
             (callbackId,),
         )
+    try:
+        sendTelegramMessage(secrets, confirmationText)
+    except HTTPError as error:
+        logging.warning("Telegram approval confirmation failed: HTTP %s", error.code)
+    try:
+        postJson(
+            f"https://api.telegram.org/bot{secrets['TELEGRAM_BOT_TOKEN']}/answerCallbackQuery",
+            {"callback_query_id": callbackId, "text": confirmationText},
+            {"Content-Type": "application/json"},
+        )
+    except HTTPError as error:
+        logging.warning("Telegram callback acknowledgement failed: HTTP %s", error.code)
     return True
 
 
@@ -183,9 +190,21 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
     return True
 
 
+def recoverInterruptedWork() -> None:
+    """Return claims abandoned by a stopped dispatcher to their durable queues."""
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.execute(
+            "UPDATE telegram_callbacks SET status = 'PENDING' WHERE status = 'PROCESSING'"
+        )
+        connection.execute(
+            "UPDATE telegram_messages SET dispatch_status = 'PENDING' WHERE dispatch_status = 'PROCESSING'"
+        )
+
+
 def main() -> None:
     """Keep exactly one dispatcher loop alive under launchd supervision."""
     secrets = getSecretValues()
+    recoverInterruptedWork()
     while True:
         try:
             dispatchNextCallback(secrets)

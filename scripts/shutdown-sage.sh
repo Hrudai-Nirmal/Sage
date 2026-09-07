@@ -29,9 +29,9 @@ function stopMatchingModelServer() {
   done
 }
 
-launchctl bootout "gui/${UID}/com.sage.model-sage" 2>/dev/null || true
-launchctl bootout "gui/${UID}/com.sage.model-iris" 2>/dev/null || true
-launchctl bootout "gui/${UID}/com.sage.telegram-dispatcher" 2>/dev/null || true
+for launchAgentName in com.sage.model-sage com.sage.model-iris com.sage.telegram-dispatcher; do
+  launchctl unload "${HOME}/Library/LaunchAgents/${launchAgentName}.plist" 2>/dev/null || true
+done
 launchctl bootout "gui/${UID}/com.sage.maintenance" 2>/dev/null || true
 
 stopMatchingModelServer "${SAGE_SAGE_MODEL_PORT:-18080}" "${sageDataRoot}/models/qwen3.5-9b-6bit"

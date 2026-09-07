@@ -28,5 +28,6 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - n8n permits workflow environment access only because the local poller must read its private bot and Core-ingress credentials; `configure-telegram.sh` copies only the ingress credential, never the independent approval credentials, into n8n's Telegram environment.
 - Telegram task and case commands create proposals only: `/task <title>` and `/case <title> | <objective>`. Inline callbacks are allowlisted and deduplicated before the native dispatcher uses Core's isolated approval credential.
 - Declining a proposal atomically closes and audits it without creating a task or case.
-- launchd installation restarts already-loaded Sage services in place and bootstraps only missing services, preventing a partial reinstall from unloading Sage or Iris.
+- launchd installation restarts already-loaded Sage services in place and persistently loads only missing user agents, preventing a partial reinstall from unloading Sage or Iris.
 - The native dispatcher records credential-safe exception types in its private log and keeps retryable messages pending when a dependency is unavailable.
+- Interrupted PROCESSING claims return to their queues when the dispatcher restarts; an already-applied callback becomes COMPLETE even if Telegram's short-lived acknowledgement has expired.

@@ -22,6 +22,7 @@ for agentName in com.sage.model-sage com.sage.model-iris com.sage.telegram-dispa
   if launchctl print "gui/${UID}/${agentName}" >/dev/null 2>&1; then
     launchctl kickstart -k "gui/${UID}/${agentName}"
   else
-    launchctl bootstrap "gui/${UID}" "${destinationPath}"
+    # User LaunchAgents loaded this way persist reliably across non-interactive desktop shells.
+    launchctl load -w "${destinationPath}"
   fi
 done
