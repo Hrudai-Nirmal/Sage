@@ -613,12 +613,18 @@ def testShutsDownSageStateWithoutDeletingDurableData(tmp_path):
     secretRoot.mkdir()
     (secretRoot / "model-server.env").write_text("SAGE_MODEL_API_KEY=test-token\n")
     repositoryRoot = Path(__file__).parents[2]
+    fakeBinRoot = tmp_path / "bin"
+    fakeBinRoot.mkdir()
+    for commandName, exitCode in (("launchctl", 0), ("lsof", 1), ("docker", 1)):
+        fakeCommand = fakeBinRoot / commandName
+        fakeCommand.write_text(f"#!/bin/zsh\nexit {exitCode}\n")
+        fakeCommand.chmod(0o755)
 
     shutdownProcess = run(
         [repositoryRoot / "scripts" / "shutdown-sage.sh"],
         check=False,
         env={
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
+            "PATH": f"{fakeBinRoot}:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
             "SAGE_DATA_ROOT": str(dataRoot),
             "SAGE_PROJECT_ROOT": str(repositoryRoot),
         },
