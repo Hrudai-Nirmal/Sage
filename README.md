@@ -9,7 +9,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
 
-Telegram routing is configured privately for the chosen forum group. The n8n long-polling workflow, Google OAuth, skills, and backup scheduling remain to be implemented after their required credentials and configuration are available.
+Telegram routing is configured privately for the chosen forum group. The active n8n poller is ingress-only; one native dispatcher owns all replies and model calls. Google OAuth, skills, and backup scheduling remain to be implemented after their required credentials and configuration are available.
 
 ## Local setup
 
@@ -19,7 +19,7 @@ The runtime bootstrap has already been run for this machine. It is safe to rerun
 SAGE_DATA_ROOT=/Users/hrudainirmal/SageData scripts/bootstrap-runtime.sh
 ```
 
-It creates the managed structure, including `context`, `skills`, `tools`, `documents`, `archives`, `research`, `temp`, `backups`, `logs`, and private service credentials. Source folders such as Downloads are intentionally not configured yet.
+It creates the managed structure, including `context`, `skills`, `tools`, `documents`, `archives`, `research`, `temp`, `backups`, `logs`, and private service credentials. Downloads is the sole configured external source and imports are copy-only.
 
 Start Docker Desktop, then validate and launch the app services:
 
@@ -44,6 +44,13 @@ The same installer registers a daily 03:15 IST maintenance agent. It removes onl
 scripts/shutdown-sage.sh
 ```
 
+Runtime modes can be changed locally with `scripts/set-sage-mode.sh <mode>` or from the Main Telegram topic:
+
+- `/normal` keeps Sage and Iris loaded.
+- `/eco` unloads both models between requests and temporarily loads only Sage on demand.
+- `/sleep` keeps Telegram mode control available but does not run model work.
+- `/shutdown` confirms in Telegram, then stops Sage launch agents, containers, and temporary state. Restart remains local-only.
+
 ## Verification
 
 ```zsh
@@ -55,6 +62,7 @@ scripts/shutdown-sage.sh
 - Sage never writes to external source folders; future imports copy into the managed data root.
 - Task, case, skill, and workflow changes are designed to use one-time user approvals. Core distinguishes the agent proposal channel from the approval channel.
 - Telegram messages are accepted only from the configured numeric user and Sage forum topics; retrying the same Telegram message ID is safe.
+- n8n only ingests allowlisted Telegram updates. The single native dispatcher is the sole owner of Telegram replies and Sage model calls.
 - `/task <title>` and `/case <title> | <objective>` return Telegram approval cards. Only the configured user's one-time Approve or Decline callback can resolve the proposal.
 - Secrets have mode `0600` under `/Users/hrudainirmal/SageData/secrets` and are not tracked by Git.
 - Model services and Docker application ports are loopback-only.

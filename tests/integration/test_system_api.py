@@ -594,6 +594,48 @@ def testShutsDownSageStateWithoutDeletingDurableData(tmp_path):
     assert durableDocument.exists()
 
 
+def testEcoModeKeepsTelegramAndMaintenanceAgentsLoaded(tmp_path):
+    """Eco may unload models, but its on-demand control plane must remain alive."""
+    dataRoot = tmp_path / "SageData"
+    secretRoot = dataRoot / "secrets"
+    secretRoot.mkdir(parents=True)
+    (secretRoot / "core.env").write_text("SAGE_OPERATOR_TOKEN=test-token\n")
+    fakeBinRoot = tmp_path / "bin"
+    fakeBinRoot.mkdir()
+    commandLog = tmp_path / "commands.log"
+    fakeLaunchctl = fakeBinRoot / "launchctl"
+    fakeLaunchctl.write_text(
+        "#!/bin/zsh\n"
+        "if [[ \"$1\" == \"list\" ]]; then exit 0; fi\n"
+        "print -r -- \"$*\" >> \"${SAGE_COMMAND_LOG}\"\n"
+    )
+    fakeLaunchctl.chmod(0o755)
+    fakeCurl = fakeBinRoot / "curl"
+    fakeCurl.write_text("#!/bin/zsh\nexit 0\n")
+    fakeCurl.chmod(0o755)
+    repositoryRoot = Path(__file__).parents[2]
+
+    modeProcess = run(
+        [repositoryRoot / "scripts" / "set-sage-mode.sh", "eco"],
+        check=False,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{fakeBinRoot}:/usr/bin:/bin",
+            "SAGE_COMMAND_LOG": str(commandLog),
+            "SAGE_DATA_ROOT": str(dataRoot),
+            "SAGE_PROJECT_ROOT": str(repositoryRoot),
+        },
+        text=True,
+    )
+
+    assert modeProcess.returncode == 0
+    commands = commandLog.read_text()
+    assert "load -w" in commands and "com.sage.telegram-dispatcher.plist" in commands
+    assert "com.sage.maintenance.plist" in commands
+    assert "unload" in commands and "com.sage.model-sage.plist" in commands
+    assert "com.sage.model-iris.plist" in commands
+
+
 def testImportsDownloadsCopyIntoManagedRegistryWithoutTouchingSource(tmp_path):
     """Sage may copy an allowed file, but must never mutate the external original."""
     sourceRoot = tmp_path / "Downloads"

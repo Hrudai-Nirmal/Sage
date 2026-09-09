@@ -31,3 +31,6 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - launchd installation restarts already-loaded Sage services in place and persistently loads only missing user agents, preventing a partial reinstall from unloading Sage or Iris.
 - The native dispatcher records credential-safe exception types in its private log and keeps retryable messages pending when a dependency is unavailable.
 - Interrupted PROCESSING claims return to their queues when the dispatcher restarts; an already-applied callback becomes COMPLETE even if Telegram's short-lived acknowledgement has expired.
+- Telegram mode commands are intentionally limited to `/normal`, `/eco`, `/sleep`, and `/shutdown`; restart remains available only on the Mac.
+- Normal keeps Sage and Iris resident. Eco keeps the dispatcher available and loads exactly one Sage server around each ordinary message. Sleep answers only with mode guidance. Shutdown acknowledges first, then unloads all Sage launch agents, stops Docker Compose, and clears bounded temporary state.
+- The n8n Telegram workflow is ingress-only. Disabled legacy model/reply nodes were removed so the native dispatcher is the only reply and model-call owner.

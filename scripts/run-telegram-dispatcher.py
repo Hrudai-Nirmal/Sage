@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -17,7 +18,80 @@ DATABASE_PATH = DATA_ROOT / "database" / "sage.db"
 MODEL_URL = "http://127.0.0.1:18080/v1/chat/completions"
 MODEL_ID = str(DATA_ROOT / "models" / "qwen3.5-9b-6bit")
 CORE_URL = "http://127.0.0.1:8787"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+def getModeCommand(messageText: str) -> str | None:
+    """Return a supported exact Telegram mode command, excluding local-only restart."""
+    commandToken = messageText.strip().split(maxsplit=1)[0] if messageText.strip() else ""
+    commandName = commandToken.split("@", 1)[0]
+    return {
+        "/normal": "NORMAL",
+        "/eco": "ECO",
+        "/sleep": "SLEEP",
+        "/shutdown": "SHUTDOWN",
+    }.get(commandName.lower())
+
+
+def getCurrentMode() -> str:
+    """Read Core's durable mode directly so local dispatch follows the same state."""
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        modeRow = connection.execute(
+            "SELECT value FROM system_settings WHERE key = 'mode'"
+        ).fetchone()
+    return str(modeRow[0]) if modeRow else "NORMAL"
+
+
+def setModelAgentState(agentName: str, shouldRun: bool) -> None:
+    """Start or stop one exact user model agent for an Eco request."""
+    agentPath = Path.home() / "Library" / "LaunchAgents" / f"{agentName}.plist"
+    if shouldRun:
+        listedAgents = subprocess.run(
+            ["launchctl", "list"], capture_output=True, check=True, text=True
+        ).stdout
+        if agentName in listedAgents:
+            subprocess.run(
+                ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{agentName}"],
+                check=True,
+            )
+        else:
+            subprocess.run(["launchctl", "load", "-w", agentPath], check=True)
+    else:
+        subprocess.run(["launchctl", "unload", agentPath], check=False)
+
+
+def waitForSageModel(secrets: dict[str, str]) -> None:
+    """Wait briefly for the single Sage model server to become ready."""
+    for _ in range(30):
+        try:
+            request = Request(
+                "http://127.0.0.1:18080/v1/models",
+                headers={"Authorization": f"Bearer {secrets['SAGE_MODEL_API_KEY']}"},
+            )
+            with urlopen(request, timeout=2):
+                return
+        except OSError:
+            time.sleep(1)
+    raise TimeoutError("Sage model did not become ready")
+
+
+def applyModeCommand(modeName: str) -> None:
+    """Apply one supported mode through the same audited local operator path."""
+    subprocess.run(
+        [PROJECT_ROOT / "scripts" / "set-sage-mode.sh", modeName.lower()],
+        check=True,
+    )
+
+
+def startShutdownAfterReply() -> None:
+    """Start shutdown only after Telegram delivery and durable queue completion."""
+    subprocess.Popen(
+        [PROJECT_ROOT / "scripts" / "set-sage-mode.sh", "shutdown"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def getSecretValues() -> dict[str, str]:
@@ -155,7 +229,7 @@ def dispatchNextCallback(secrets: dict[str, str]) -> bool:
 
 
 def dispatchNextMessage(secrets: dict[str, str]) -> bool:
-    """Claim one pending Main message and complete its one model-backed Telegram reply."""
+    """Claim one Main message and honor the active resource mode."""
     with sqlite3.connect(DATABASE_PATH) as connection:
         message = connection.execute(
             """SELECT message_id, text FROM telegram_messages
@@ -170,9 +244,47 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
             "UPDATE telegram_messages SET dispatch_status = 'PROCESSING' WHERE message_id = ?",
             (messageId,),
         )
+    modeCommand = getModeCommand(messageText)
+    if modeCommand == "SHUTDOWN":
+        replyText = "Sage is shutting down all Sage services and Docker cleanly."
+        try:
+            sendTelegramMessage(secrets, replyText)
+            with sqlite3.connect(DATABASE_PATH) as connection:
+                connection.execute(
+                    "UPDATE telegram_messages SET dispatch_status = 'COMPLETE', reply_text = ? WHERE message_id = ?",
+                    (replyText, messageId),
+                )
+            startShutdownAfterReply()
+        except Exception as error:
+            logging.error("Telegram shutdown dispatch failed: %s", type(error).__name__)
+            with sqlite3.connect(DATABASE_PATH) as connection:
+                connection.execute(
+                    "UPDATE telegram_messages SET dispatch_status = 'PENDING' WHERE message_id = ?",
+                    (messageId,),
+                )
+            return False
+        return True
+
+    isEcoModelLoaded = False
     try:
-        replyText = createApprovalCard(secrets, messageText)
+        if modeCommand is not None:
+            applyModeCommand(modeCommand)
+            replyText = {
+                "NORMAL": "Sage is now in Normal mode. Sage and Iris are ready.",
+                "ECO": "Sage is now in Eco mode. Models will load only when needed.",
+                "SLEEP": "Sage is now sleeping. Telegram mode controls remain available.",
+            }[modeCommand]
+            sendTelegramMessage(secrets, replyText)
+        elif getCurrentMode() == "SLEEP":
+            replyText = "Sage is sleeping. Use /normal or /eco when you need me."
+            sendTelegramMessage(secrets, replyText)
+        else:
+            replyText = createApprovalCard(secrets, messageText)
         if replyText is None:
+            if getCurrentMode() == "ECO":
+                setModelAgentState("com.sage.model-sage", True)
+                isEcoModelLoaded = True
+                waitForSageModel(secrets)
             modelResponse = postJson(
                 MODEL_URL,
                 {"model": MODEL_ID, "messages": [{"role": "system", "content": "You are Sage, a concise personal assistant. Never claim an approval-gated action was completed."}, {"role": "user", "content": messageText}], "max_tokens": 512, "temperature": 0.7},
@@ -185,6 +297,9 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
         with sqlite3.connect(DATABASE_PATH) as connection:
             connection.execute("UPDATE telegram_messages SET dispatch_status = 'PENDING' WHERE message_id = ?", (messageId,))
         return False
+    finally:
+        if isEcoModelLoaded:
+            setModelAgentState("com.sage.model-sage", False)
     with sqlite3.connect(DATABASE_PATH) as connection:
         connection.execute("UPDATE telegram_messages SET dispatch_status = 'COMPLETE', reply_text = ? WHERE message_id = ?", (replyText, messageId))
     return True
