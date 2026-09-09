@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import sqlite3
 from subprocess import run
 from threading import Thread
 
@@ -36,6 +37,41 @@ def testReportsPersistedNormalModeByDefault(tmp_path):
         "mode": "NORMAL",
         "status": "healthy",
     }
+
+
+def testServesLocalOperatorDashboardAndOverview(tmp_path):
+    """The Mac operator surface exposes status and controls without a second chat system."""
+    app = createApp(databasePath=tmp_path / "sage.db")
+
+    with TestClient(app) as client:
+        dashboardResponse = client.get("/operator")
+        overviewResponse = client.get("/v1/operator/overview")
+        detailsResponse = client.get("/v1/operator/details")
+        modeResponse = client.post("/v1/operator/mode", json={"mode": "ECO"})
+
+    assert dashboardResponse.status_code == 200
+    assert "Sage Operator" in dashboardResponse.text
+    assert "Normal" in dashboardResponse.text
+    assert "Recent activity" in dashboardResponse.text
+    assert overviewResponse.json()["counts"] == {
+        "approvals": 0,
+        "auditEvents": 0,
+        "cases": 0,
+        "documents": 0,
+        "researchRuns": 0,
+        "schedules": 0,
+        "tasks": 0,
+    }
+    assert detailsResponse.json() == {
+        "approvals": [],
+        "auditEvents": [],
+        "cases": [],
+        "documents": [],
+        "researchRuns": [],
+        "schedules": [],
+        "tasks": [],
+    }
+    assert modeResponse.json()["mode"] == "ECO"
 
 
 def testRunsAuthenticatedBoundedOnlineResearch(tmp_path):
@@ -191,6 +227,50 @@ def testCreatesScheduledTaskMetadataOnlyAfterApproval(tmp_path):
         ]
 
 
+def testCreatesScheduledDeliveryOnlyAfterApproval(tmp_path):
+    """Reports and notifications enter the durable scheduler only after confirmation."""
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=tmp_path / "sage.db",
+        proposalToken="proposal-token",
+    )
+
+    with TestClient(app) as client:
+        proposalResponse = client.post(
+            "/v1/approval-requests",
+            json={
+                "actionType": "CREATE_SCHEDULE",
+                "payload": {
+                    "dueAt": "2026-09-11T09:00:00+05:30",
+                    "kind": "REPORT",
+                    "prompt": "Summarize my open tasks",
+                    "recurrence": "DAILY",
+                    "title": "Morning plan",
+                },
+            },
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+        )
+        approvalId = proposalResponse.json()["id"]
+        assert client.get("/v1/schedules").json() == []
+
+        confirmationResponse = client.post(
+            f"/v1/approval-requests/{approvalId}/confirm",
+            json={"approvedBy": "telegram:123456"},
+            headers={"X-Sage-Approval-Token": "approval-token"},
+        )
+        schedules = client.get("/v1/schedules").json()
+
+        assert confirmationResponse.status_code == 200
+        assert len(schedules) == 1
+        assert {key: value for key, value in schedules[0].items() if key != "id"} == {
+            "kind": "REPORT",
+            "nextRunAt": "2026-09-11T09:00:00+05:30",
+            "recurrence": "DAILY",
+            "status": "ACTIVE",
+            "title": "Morning plan",
+        }
+
+
 def testPersistsOperatorSelectedModeAcrossAppRestarts(tmp_path):
     """Mode changes must survive a service restart so backlog handling is predictable."""
     databasePath = tmp_path / "sage.db"
@@ -325,6 +405,17 @@ def testAcceptsOnlyAllowlistedTelegramMessagesFromConfiguredForumTopics(tmp_path
             },
             headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
         )
+        reportsTopicResponse = client.post(
+            "/v1/telegram/messages",
+            json={
+                "chatId": -1004370918853,
+                "messageId": 46,
+                "messageThreadId": 6,
+                "senderId": 8961856168,
+                "text": "Conversation belongs in Main",
+            },
+            headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
+        )
         duplicateResponse = client.post(
             "/v1/telegram/messages",
             json={
@@ -341,8 +432,48 @@ def testAcceptsOnlyAllowlistedTelegramMessagesFromConfiguredForumTopics(tmp_path
     assert acceptedResponse.json() == {"status": "ACCEPTED", "topic": "MAIN"}
     assert foreignUserResponse.status_code == 403
     assert wrongTopicResponse.status_code == 403
+    assert reportsTopicResponse.status_code == 403
     assert duplicateResponse.status_code == 200
     assert duplicateResponse.json() == {"status": "DUPLICATE", "topic": "MAIN"}
+
+
+def testAcceptsAllowlistedTelegramImageWithoutText(tmp_path):
+    """A photo may enter the durable queue without requiring a synthetic message body."""
+    databasePath = tmp_path / "sage.db"
+    app = createApp(
+        databasePath=databasePath,
+        telegramAllowedUserId=8961856168,
+        telegramChatId=-1004370918853,
+        telegramIngressToken="telegram-ingress-token",
+        telegramTopicIds={"MAIN": 5},
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/telegram/messages",
+            json={
+                "attachment": {
+                    "fileId": "telegram-file-id",
+                    "fileName": "photo.jpg",
+                    "fileUniqueId": "stable-file-id",
+                    "kind": "PHOTO",
+                    "mimeType": "image/jpeg",
+                },
+                "chatId": -1004370918853,
+                "messageId": 45,
+                "messageThreadId": 5,
+                "senderId": 8961856168,
+                "text": "",
+            },
+            headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
+        )
+
+    assert response.status_code == 201
+    with sqlite3.connect(databasePath) as connection:
+        attachmentJson = connection.execute(
+            "SELECT attachment_json FROM telegram_messages WHERE message_id = 45"
+        ).fetchone()[0]
+    assert '"fileUniqueId": "stable-file-id"' in attachmentJson
 
 
 def testConfirmsApprovalOnlyForConfiguredTelegramUser(tmp_path):

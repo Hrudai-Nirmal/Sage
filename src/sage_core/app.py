@@ -7,12 +7,16 @@ from secrets import compare_digest
 from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field, model_validator
 
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
 from sage_core.document_state import DocumentStateRepository
 from sage_core.online_research import OnlineResearchService
+from sage_core.operator_state import OperatorStateRepository
+from sage_core.operator_ui import getOperatorHtml
+from sage_core.schedule_state import ScheduleStateRepository
 from sage_core.system_state import SystemStateRepository
 from sage_core.telegram_state import TelegramCallback, TelegramMessage, TelegramStateRepository
 
@@ -48,6 +52,33 @@ class CaseApprovalRequestPayload(BaseModel):
     payload: CaseProposalPayload
 
 
+class ScheduleProposalPayload(BaseModel):
+    """Validate an approval-gated scheduled report or notification."""
+
+    dueAt: str = Field(min_length=1, max_length=100)
+    kind: Literal["REPORT", "NOTIFICATION"]
+    prompt: str = Field(min_length=1, max_length=10_000)
+    recurrence: Literal["DAILY", "WEEKLY"] | None = None
+    title: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validateDueAt(self) -> "ScheduleProposalPayload":
+        """Require an ISO timestamp with timezone so missed-run ordering is deterministic."""
+        from datetime import datetime
+
+        dueTimestamp = datetime.fromisoformat(self.dueAt)
+        if dueTimestamp.tzinfo is None:
+            raise ValueError("Schedule dueAt must include a timezone")
+        return self
+
+
+class ScheduleApprovalRequestPayload(BaseModel):
+    """Require explicit confirmation before creating recurring or future work."""
+
+    actionType: Literal["CREATE_SCHEDULE"]
+    payload: ScheduleProposalPayload
+
+
 class ApprovalConfirmationPayload(BaseModel):
     """Capture the independently verified Telegram actor who approved an action."""
 
@@ -67,6 +98,17 @@ class DocumentImportPayload(BaseModel):
     sourceRoot: str = Field(min_length=1, max_length=100)
 
 
+class TelegramAttachmentPayload(BaseModel):
+    """Validate bounded Telegram metadata before the host downloads an attachment."""
+
+    fileId: str = Field(min_length=1, max_length=500)
+    fileName: str = Field(min_length=1, max_length=500)
+    fileSize: int | None = Field(default=None, ge=1, le=20_000_000)
+    fileUniqueId: str = Field(min_length=1, max_length=500, pattern=r"^[A-Za-z0-9_-]+$")
+    kind: Literal["PHOTO", "DOCUMENT"]
+    mimeType: Literal["image/jpeg", "image/png", "image/webp", "application/pdf"]
+
+
 class TelegramMessagePayload(BaseModel):
     """Validate the normalized inbound Telegram message sent by n8n."""
 
@@ -74,7 +116,15 @@ class TelegramMessagePayload(BaseModel):
     messageId: int = Field(ge=1)
     messageThreadId: int = Field(ge=1)
     senderId: int = Field(ge=1)
-    text: str = Field(min_length=1, max_length=10_000)
+    attachment: TelegramAttachmentPayload | None = None
+    text: str = Field(default="", max_length=10_000)
+
+    @model_validator(mode="after")
+    def validateMessageContent(self) -> "TelegramMessagePayload":
+        """Require either conversational text or one supported attachment."""
+        if not self.text.strip() and self.attachment is None:
+            raise ValueError("Telegram message must contain text or an attachment")
+        return self
 
 
 class TelegramApprovalPayload(BaseModel):
@@ -127,6 +177,7 @@ def createApp(
         importRoots=importRoots or {},
     )
     systemStateRepository = SystemStateRepository(database)
+    operatorStateRepository = OperatorStateRepository(database)
     telegramStateRepository = TelegramStateRepository(
         database=database,
         allowedUserId=telegramAllowedUserId,
@@ -134,6 +185,26 @@ def createApp(
         topicIds=telegramTopicIds,
     )
     app = FastAPI(title="Sage Core", version="0.1.0")
+
+    @app.get("/operator", response_class=HTMLResponse)
+    def getOperatorDashboard() -> str:
+        """Serve the local control and status surface without adding a chat channel."""
+        return getOperatorHtml()
+
+    @app.get("/v1/operator/overview")
+    def getOperatorOverview() -> dict[str, object]:
+        """Return the dashboard's cross-module status read model."""
+        return operatorStateRepository.getOverview()
+
+    @app.get("/v1/operator/details")
+    def getOperatorDetails() -> dict[str, list[dict[str, object]]]:
+        """Return recent cross-module records for the localhost dashboard."""
+        return operatorStateRepository.getDetails()
+
+    @app.post("/v1/operator/mode")
+    def setOperatorMode(modeUpdate: SystemModePayload) -> dict[str, str]:
+        """Persist a localhost operator mode request for host reconciliation."""
+        return {"mode": systemStateRepository.setMode(modeUpdate.mode), "status": "healthy"}
 
     @app.get("/v1/system/status")
     def getSystemStatus() -> dict[str, str]:
@@ -157,7 +228,7 @@ def createApp(
 
     @app.post("/v1/approval-requests", status_code=status.HTTP_201_CREATED)
     def createApprovalRequest(
-        approvalRequest: TaskApprovalRequestPayload | CaseApprovalRequestPayload,
+        approvalRequest: TaskApprovalRequestPayload | CaseApprovalRequestPayload | ScheduleApprovalRequestPayload,
         sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
     ) -> dict[str, str]:
         """Create a pending proposal from the constrained agent proposal channel."""
@@ -196,6 +267,11 @@ def createApp(
     def listCases() -> list[dict[str, str]]:
         """List only cases materialized through the approval path."""
         return approvalStateRepository.listCases()
+
+    @app.get("/v1/schedules")
+    def listSchedules() -> list[dict[str, str | None]]:
+        """List approved schedules and their next durable run time."""
+        return ScheduleStateRepository(database).listSchedules()
 
     @app.get("/v1/audit-events")
     def listAuditEvents() -> list[dict[str, str]]:

@@ -5,13 +5,14 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 ## Current foundation
 
 - Native MLX-VLM model services are verified with Sage (`Qwen3.5-9B-6bit`) and Iris (`Qwen3-VL-2B-Instruct-4bit`).
-- Sage Core is a FastAPI + SQLite service with durable modes, task/case approval gates, separate proposal/approval/operator credentials, an audit trail, and an allowlisted Telegram ingress boundary.
+- Sage Core is a FastAPI + SQLite service with durable modes, task/case/schedule approval gates, retryable scheduled delivery, separate proposal/approval/operator credentials, an audit trail, and an allowlisted Telegram ingress boundary.
 - Online research uses Tavily basic search plus local Trafilatura extraction, with bounded source counts, public-network URL checks, durable citations, and retrieval audit events.
 - Versioned role contracts in `prompts/` define Sage's user-facing authority and Iris's restricted background-analysis role. The dispatcher loads Sage's prompt for every model call.
+- Telegram images and image/PDF documents are bounded at 20 MB, inspected by Iris, synthesized by Sage, and removed from temporary storage after each request.
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
 
-Telegram routing is configured privately for the chosen forum group. The active n8n poller is ingress-only; one native dispatcher owns all replies and model calls. Google OAuth, skills, and backup scheduling remain to be implemented after their required credentials and configuration are available.
+Telegram routing is configured privately for the chosen forum group. The active n8n poller is ingress-only; one native dispatcher owns all replies, scheduled deliveries, and model calls. Google OAuth and skills remain to be implemented after their required credentials and configuration are available.
 
 ## Local setup
 
@@ -31,6 +32,7 @@ docker compose up --build -d
 ```
 
 Core listens only on `127.0.0.1:8787`, and n8n listens only on `127.0.0.1:5678`.
+Open the local operator dashboard at [http://127.0.0.1:8787/operator](http://127.0.0.1:8787/operator) to inspect modes, approvals, tasks, cases, documents, research, schedules, and audit activity. Conversation remains in Telegram.
 
 Install native model services after Docker is available and the machine is intended to run in normal mode:
 
@@ -55,6 +57,17 @@ Runtime modes can be changed locally with `scripts/set-sage-mode.sh <mode>` or f
 
 Use `/research <question>` in the Main Telegram topic for current online research. Explicit natural phrasing such as “look for”, “search online for”, or “look up” works too. Sage retrieves at most three India-boosted sources, extracts readable page content locally, treats all retrieved text as untrusted, and returns a timestamped answer with numbered citations. Ambiguous ordinary conversation does not silently trigger web access.
 
+Send a photo, JPEG/PNG/WebP document, or PDF in Main for Iris-assisted analysis. PDFs currently analyze the first rendered page. Telegram-reported sizes are checked when present and downloaded bytes are always capped at 20 MB; temporary files are deleted after the request.
+
+Create approval-gated scheduled work with:
+
+```text
+/schedule 2026-09-11T09:00:00+05:30 | REPORT | Morning plan | Summarize my open tasks | DAILY
+/schedule 2026-09-11T18:00:00+05:30 | NOTIFICATION | Placement deadline | Submit the placement form
+```
+
+The recurrence suffix is optional and accepts `DAILY` or `WEEKLY`. Reports use the current durable task/case snapshot and go to Scheduled Reports; notifications go to Notifications. Sleep and Shutdown preserve overdue work as backlog. Normal and Eco deliver it after Sage is available, and transient failures retry with bounded backoff.
+
 ## Verification
 
 ```zsh
@@ -67,7 +80,7 @@ Use `/research <question>` in the Main Telegram topic for current online researc
 - Task, case, skill, and workflow changes are designed to use one-time user approvals. Core distinguishes the agent proposal channel from the approval channel.
 - Telegram messages are accepted only from the configured numeric user and Sage forum topics; retrying the same Telegram message ID is safe.
 - n8n only ingests allowlisted Telegram updates. The single native dispatcher is the sole owner of Telegram replies and Sage model calls.
-- `/task <title>` and `/case <title> | <objective>` return Telegram approval cards. Only the configured user's one-time Approve or Decline callback can resolve the proposal.
+- `/task <title>`, `/case <title> | <objective>`, and `/schedule ...` return Telegram approval cards. Only the configured user's one-time Approve or Decline callback can resolve the proposal.
 - Secrets have mode `0600` under `/Users/hrudainirmal/SageData/secrets` and are not tracked by Git.
 - Model services and Docker application ports are loopback-only.
 - A model server never starts when its reserved port belongs to another process; a matching existing server is reused instead of duplicated.

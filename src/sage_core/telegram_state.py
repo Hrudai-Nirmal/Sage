@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
 
 from sage_core.database import SageDatabase
 
@@ -17,6 +18,7 @@ class TelegramMessage:
     messageThreadId: int
     senderId: int
     text: str
+    attachment: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -54,8 +56,8 @@ class TelegramStateRepository:
             insertResult = connection.execute(
                 """
                 INSERT OR IGNORE INTO telegram_messages (
-                    message_id, chat_id, message_thread_id, sender_id, text, received_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    message_id, chat_id, message_thread_id, sender_id, text, attachment_json, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message.messageId,
@@ -63,6 +65,7 @@ class TelegramStateRepository:
                     message.messageThreadId,
                     message.senderId,
                     message.text,
+                    json.dumps(message.attachment) if message.attachment else None,
                     datetime.now(UTC).isoformat(),
                 ),
             )
@@ -105,5 +108,5 @@ class TelegramStateRepository:
             raise PermissionError("Telegram sender is not allowlisted")
         if message.chatId != self.chatId:
             raise PermissionError("Telegram chat is not allowlisted")
-        if message.messageThreadId not in self.topicNamesById:
-            raise PermissionError("Telegram forum topic is not allowlisted")
+        if self.topicNamesById.get(message.messageThreadId) != "MAIN":
+            raise PermissionError("Telegram conversation is accepted only in the Main topic")

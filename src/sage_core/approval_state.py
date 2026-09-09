@@ -67,7 +67,7 @@ class ApprovalStateRepository:
                 raise LookupError("Approval request was not found")
 
             actionType, expiresAt, payloadJson, status = approvalRow
-            if actionType not in {"CREATE_CASE", "CREATE_TASK"} or status != "PENDING":
+            if actionType not in {"CREATE_CASE", "CREATE_TASK", "CREATE_SCHEDULE"} or status != "PENDING":
                 raise ValueError("Approval request cannot be fulfilled")
             if datetime.fromisoformat(expiresAt) <= datetime.now(UTC):
                 raise TimeoutError("Approval request has expired")
@@ -100,7 +100,7 @@ class ApprovalStateRepository:
                         approvalId,
                     ),
                 )
-            else:
+            elif actionType == "CREATE_CASE":
                 connection.execute(
                     """
                     INSERT INTO cases (
@@ -111,6 +111,23 @@ class ApprovalStateRepository:
                         str(uuid4()),
                         taskPayload["title"],
                         taskPayload["objective"],
+                        datetime.now(UTC).isoformat(),
+                        approvalId,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO schedules (
+                        id, title, prompt, kind, status, recurrence, next_run_at,
+                        created_at, approval_request_id
+                    ) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)""",
+                    (
+                        str(uuid4()),
+                        taskPayload["title"],
+                        taskPayload["prompt"],
+                        taskPayload["kind"],
+                        taskPayload.get("recurrence"),
+                        taskPayload["dueAt"],
                         datetime.now(UTC).isoformat(),
                         approvalId,
                     ),

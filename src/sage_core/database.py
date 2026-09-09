@@ -96,12 +96,38 @@ class SageDatabase:
                     sources_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS schedules (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    recurrence TEXT,
+                    next_run_at TEXT,
+                    created_at TEXT NOT NULL,
+                    approval_request_id TEXT NOT NULL UNIQUE
+                );
+
+                CREATE TABLE IF NOT EXISTS scheduled_deliveries (
+                    id TEXT PRIMARY KEY,
+                    schedule_id TEXT NOT NULL,
+                    due_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    error_type TEXT,
+                    completed_at TEXT,
+                    UNIQUE(schedule_id, due_at),
+                    FOREIGN KEY (schedule_id) REFERENCES schedules(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS telegram_messages (
                     message_id INTEGER PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
                     message_thread_id INTEGER NOT NULL,
                     sender_id INTEGER NOT NULL,
                     text TEXT NOT NULL,
+                    attachment_json TEXT,
                     received_at TEXT NOT NULL
                 );
 
@@ -122,6 +148,7 @@ class SageDatabase:
             self._addTaskColumnIfMissing(connection, "recurrence", "TEXT")
             self._addTelegramColumnIfMissing(connection, "dispatch_status", "TEXT NOT NULL DEFAULT 'PENDING'")
             self._addTelegramColumnIfMissing(connection, "reply_text", "TEXT")
+            self._addTelegramColumnIfMissing(connection, "attachment_json", "TEXT")
 
     def _addTaskColumnIfMissing(
         self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
