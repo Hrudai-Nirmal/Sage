@@ -9,6 +9,7 @@ services:
     env_file:
       - ${SAGE_CORE_ENV_FILE:?Set SAGE_CORE_ENV_FILE in .env}
       - ${SAGE_TELEGRAM_ENV_FILE:?Set SAGE_TELEGRAM_ENV_FILE in .env}
+      - ${SAGE_ONLINE_ENV_FILE:?Set SAGE_ONLINE_ENV_FILE in .env}
     environment:
       SAGE_DATA_ROOT: /var/lib/sage
       SAGE_DOWNLOADS_IMPORT_ROOT: /imports/downloads

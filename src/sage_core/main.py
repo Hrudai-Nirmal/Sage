@@ -8,20 +8,28 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from sage_core.app import createApp
+from sage_core.database import SageDatabase
+from sage_core.online_research import OnlineResearchService
 
 
 def createConfiguredApp() -> FastAPI:
     """Create Core from required private environment variables and a managed data root."""
     dataRoot = _getRequiredEnvironmentPath("SAGE_DATA_ROOT")
+    databasePath = dataRoot / "database" / "sage.db"
     return createApp(
         approvalToken=_getRequiredEnvironmentValue("SAGE_APPROVAL_TOKEN"),
         dataRoot=dataRoot,
-        databasePath=dataRoot / "database" / "sage.db",
+        databasePath=databasePath,
         importRoots={
             "downloads": _getRequiredEnvironmentPath("SAGE_DOWNLOADS_IMPORT_ROOT"),
         },
         operatorToken=_getRequiredEnvironmentValue("SAGE_OPERATOR_TOKEN"),
         proposalToken=_getRequiredEnvironmentValue("SAGE_PROPOSAL_TOKEN"),
+        researchService=OnlineResearchService(
+            database=SageDatabase(databasePath),
+            tavilyApiKey=_getRequiredEnvironmentValue("TAVILY_API_KEY"),
+        ),
+        researchToken=_getRequiredEnvironmentValue("SAGE_RESEARCH_TOKEN"),
         telegramAllowedUserId=_getRequiredEnvironmentInteger("SAGE_TELEGRAM_ALLOWED_USER_ID"),
         telegramChatId=_getRequiredEnvironmentInteger("SAGE_TELEGRAM_CHAT_ID"),
         telegramIngressToken=_getRequiredEnvironmentValue("SAGE_TELEGRAM_INGRESS_TOKEN"),

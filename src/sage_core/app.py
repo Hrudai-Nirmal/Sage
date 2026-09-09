@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
 from sage_core.document_state import DocumentStateRepository
+from sage_core.online_research import OnlineResearchService
 from sage_core.system_state import SystemStateRepository
 from sage_core.telegram_state import TelegramCallback, TelegramMessage, TelegramStateRepository
 
@@ -92,6 +93,13 @@ class TelegramCallbackPayload(BaseModel):
     senderId: int = Field(ge=1)
 
 
+class ResearchSearchPayload(BaseModel):
+    """Bound automatic online research to a small evidence set."""
+
+    maxResults: int = Field(default=3, ge=1, le=5)
+    query: str = Field(min_length=1, max_length=2_000)
+
+
 def createApp(
     databasePath: Path,
     dataRoot: Path | None = None,
@@ -103,6 +111,8 @@ def createApp(
     telegramChatId: int | None = None,
     telegramIngressToken: str = "",
     telegramTopicIds: dict[str, int] | None = None,
+    researchService: OnlineResearchService | None = None,
+    researchToken: str = "",
 ) -> FastAPI:
     """Create Sage Core with an explicit SQLite path for predictable local state."""
     if not isinstance(databasePath, Path):
@@ -191,6 +201,20 @@ def createApp(
     def listAuditEvents() -> list[dict[str, str]]:
         """List durable audit summaries for the local operator interface."""
         return approvalStateRepository.listAuditEvents()
+
+    @app.post("/v1/research/search")
+    def searchOnline(
+        researchSearch: ResearchSearchPayload,
+        sageResearchToken: str = Header(alias="X-Sage-Research-Token"),
+    ) -> dict[str, object]:
+        """Run one authenticated read-only web search with retained citations."""
+        _validateToken(sageResearchToken, researchToken)
+        if researchService is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Online research is unavailable")
+        try:
+            return researchService.searchWeb(researchSearch.query, researchSearch.maxResults)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
 
     @app.post("/v1/documents/imports", status_code=status.HTTP_201_CREATED)
     def importDocument(

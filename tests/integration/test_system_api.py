@@ -11,6 +11,19 @@ from sage_core.app import createApp
 from sage_core.main import createConfiguredApp
 
 
+class FakeResearchService:
+    """Return deterministic citations without making a network request."""
+
+    def searchWeb(self, query: str, maxResults: int) -> dict[str, object]:
+        """Mirror the public online-research response contract."""
+        return {
+            "id": "research-1",
+            "query": query,
+            "retrievedAt": "2026-09-09T00:00:00+00:00",
+            "sources": [{"title": "Source", "url": "https://example.com", "content": "Evidence"}],
+        }
+
+
 def testReportsPersistedNormalModeByDefault(tmp_path):
     """The operator interface needs a reliable, local service status baseline."""
     app = createApp(databasePath=tmp_path / "sage.db")
@@ -23,6 +36,27 @@ def testReportsPersistedNormalModeByDefault(tmp_path):
         "mode": "NORMAL",
         "status": "healthy",
     }
+
+
+def testRunsAuthenticatedBoundedOnlineResearch(tmp_path):
+    """The dispatcher can request automatic read-only research through its own token."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        researchService=FakeResearchService(),
+        researchToken="research-token",
+    )
+
+    with TestClient(app) as client:
+        deniedResponse = client.post("/v1/research/search", json={"query": "latest news"})
+        response = client.post(
+            "/v1/research/search",
+            json={"query": "latest news", "maxResults": 3},
+            headers={"X-Sage-Research-Token": "research-token"},
+        )
+
+    assert deniedResponse.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["url"] == "https://example.com"
 
 
 def testCreatesTaskOnlyAfterApprovalConfirmation(tmp_path):
@@ -219,6 +253,8 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
     monkeypatch.setenv("SAGE_DOWNLOADS_IMPORT_ROOT", str(downloadsRoot))
     monkeypatch.setenv("SAGE_OPERATOR_TOKEN", "operator-token")
     monkeypatch.setenv("SAGE_PROPOSAL_TOKEN", "proposal-token")
+    monkeypatch.setenv("SAGE_RESEARCH_TOKEN", "research-token")
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-token")
     monkeypatch.setenv("SAGE_TELEGRAM_ALLOWED_USER_ID", "8961856168")
     monkeypatch.setenv("SAGE_TELEGRAM_CHAT_ID", "-1004370918853")
     monkeypatch.setenv("SAGE_TELEGRAM_INGRESS_TOKEN", "telegram-ingress-token")

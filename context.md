@@ -34,3 +34,6 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Telegram mode commands are intentionally limited to `/normal`, `/eco`, `/sleep`, and `/shutdown`; restart remains available only on the Mac.
 - Normal keeps Sage and Iris resident. Eco keeps the dispatcher available and loads exactly one Sage server around each ordinary message. Sleep answers only with mode guidance. Shutdown acknowledges first, then unloads all Sage launch agents, stops Docker Compose, and clears bounded temporary state.
 - The n8n Telegram workflow is ingress-only. Disabled legacy model/reply nodes were removed so the native dispatcher is the only reply and model-call owner.
+- Explicit `/research <question>` messages use Tavily basic search with at most three sources, then local Trafilatura extraction. Ordinary chat never infers permission to browse.
+- Research provider credentials live only in `/Users/hrudainirmal/SageData/secrets/online.env`; the dispatcher receives only a separate Core research-channel credential.
+- Research source text is framed as untrusted evidence for the model. Public-network URL validation, redirect validation, byte limits, source limits, durable source snapshots, retrieval timestamps, and audit events bound the online surface.

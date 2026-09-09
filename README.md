@@ -6,6 +6,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 
 - Native MLX-VLM model services are verified with Sage (`Qwen3.5-9B-6bit`) and Iris (`Qwen3-VL-2B-Instruct-4bit`).
 - Sage Core is a FastAPI + SQLite service with durable modes, task/case approval gates, separate proposal/approval/operator credentials, an audit trail, and an allowlisted Telegram ingress boundary.
+- Online research uses Tavily basic search plus local Trafilatura extraction, with bounded source counts, public-network URL checks, durable citations, and retrieval audit events.
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
 
@@ -51,6 +52,8 @@ Runtime modes can be changed locally with `scripts/set-sage-mode.sh <mode>` or f
 - `/sleep` keeps Telegram mode control available but does not run model work.
 - `/shutdown` confirms in Telegram, then stops Sage launch agents, containers, and temporary state. Restart remains local-only.
 
+Use `/research <question>` in the Main Telegram topic for current online research. Sage retrieves at most three sources, extracts readable page content locally, treats all retrieved text as untrusted, and returns a timestamped answer with numbered citations. Ordinary conversation does not silently trigger web access.
+
 ## Verification
 
 ```zsh
@@ -67,3 +70,4 @@ Runtime modes can be changed locally with `scripts/set-sage-mode.sh <mode>` or f
 - Secrets have mode `0600` under `/Users/hrudainirmal/SageData/secrets` and are not tracked by Git.
 - Model services and Docker application ports are loopback-only.
 - A model server never starts when its reserved port belongs to another process; a matching existing server is reused instead of duplicated.
+- Online fetches accept only HTTP(S), reject credentials in URLs and non-public resolved addresses, validate redirects, cap pages at 2 MB, and retain at most 30,000 extracted characters per source.

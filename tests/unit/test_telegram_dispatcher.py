@@ -86,6 +86,19 @@ def testRecognizesOnlyApprovedTelegramModeCommands():
     assert dispatcher.getModeCommand("please use eco") is None
 
 
+def testRecognizesExplicitResearchCommand():
+    """Online research is deliberate and never inferred from ordinary conversation."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherResearch", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    assert dispatcher.getResearchQuery("/research current MLX releases") == "current MLX releases"
+    assert dispatcher.getResearchQuery("what is new?") is None
+    assert dispatcher.getResearchQuery("/research   ") is None
+
+
 def testSleepRepliesWithoutCallingModel(tmp_path, monkeypatch):
     """Sleep mode keeps Telegram control responsive without loading Sage."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"

@@ -89,6 +89,13 @@ class SageDatabase:
                     imported_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS research_runs (
+                    id TEXT PRIMARY KEY,
+                    query TEXT NOT NULL,
+                    retrieved_at TEXT NOT NULL,
+                    sources_json TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS telegram_messages (
                     message_id INTEGER PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
