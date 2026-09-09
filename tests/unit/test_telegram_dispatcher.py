@@ -137,6 +137,20 @@ def testBuildsRecentConversationWithoutCurrentMessageDuplication(tmp_path, monke
     ]
 
 
+def testLoadsVersionedSagePrompt():
+    """Telegram replies use the shared role contract instead of an inline identity fragment."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherPrompt", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    prompt = dispatcher.loadSystemPrompt("sage")
+
+    assert prompt.startswith("# Sage system prompt")
+    assert "explicit user approval" in prompt
+
+
 def testSleepRepliesWithoutCallingModel(tmp_path, monkeypatch):
     """Sleep mode keeps Telegram control responsive without loading Sage."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
