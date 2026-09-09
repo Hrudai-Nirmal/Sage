@@ -52,7 +52,7 @@ Runtime modes can be changed locally with `scripts/set-sage-mode.sh <mode>` or f
 - `/sleep` keeps Telegram mode control available but does not run model work.
 - `/shutdown` confirms in Telegram, then stops Sage launch agents, containers, and temporary state. Restart remains local-only.
 
-Use `/research <question>` in the Main Telegram topic for current online research. Sage retrieves at most three sources, extracts readable page content locally, treats all retrieved text as untrusted, and returns a timestamped answer with numbered citations. Ordinary conversation does not silently trigger web access.
+Use `/research <question>` in the Main Telegram topic for current online research. Explicit natural phrasing such as “look for”, “search online for”, or “look up” works too. Sage retrieves at most three India-boosted sources, extracts readable page content locally, treats all retrieved text as untrusted, and returns a timestamped answer with numbered citations. Ambiguous ordinary conversation does not silently trigger web access.
 
 ## Verification
 

@@ -110,6 +110,7 @@ class OnlineResearchService:
             "https://api.tavily.com/search",
             {
                 "query": normalizedQuery,
+                "country": "india",
                 "search_depth": "basic",
                 "max_results": maxResults,
                 "include_answer": False,

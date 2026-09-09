@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import time
@@ -34,13 +35,56 @@ def getModeCommand(messageText: str) -> str | None:
     }.get(commandName.lower())
 
 
-def getResearchQuery(messageText: str) -> str | None:
-    """Return the non-empty question from an explicit Telegram research command."""
+def getResearchQuery(messageText: str, previousUserMessage: str | None = None) -> str | None:
+    """Return a query only from deterministic search wording or its direct follow-up."""
     commandToken, separator, query = messageText.strip().partition(" ")
     commandName = commandToken.split("@", 1)[0].lower()
-    if commandName != "/research" or not separator or not query.strip():
-        return None
-    return query.strip()
+    if commandName == "/research":
+        return query.strip() if separator and query.strip() else None
+    normalizedMessage = messageText.strip()
+    researchPatterns = (
+        r"^(?:can|could|would) you (?:please )?(?:look for|search(?: online)? for|find|research|look up)\s+(.+)$",
+        r"^(?:please )?(?:look for|search(?: online)? for|find me|research|look up)\s+(.+)$",
+    )
+    for researchPattern in researchPatterns:
+        researchMatch = re.match(researchPattern, normalizedMessage, flags=re.IGNORECASE)
+        if researchMatch:
+            return researchMatch.group(1).strip(" .?!")
+    if previousUserMessage and re.search(
+        r"\b(?:try it|do it now|go ahead|search now)\b", normalizedMessage, flags=re.IGNORECASE
+    ):
+        return getResearchQuery(previousUserMessage)
+    return None
+
+
+def getPreviousUserMessage(messageId: int) -> str | None:
+    """Return the immediately preceding completed user message for explicit follow-ups."""
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        previousRow = connection.execute(
+            """SELECT text FROM telegram_messages
+               WHERE message_id < ? AND dispatch_status = 'COMPLETE'
+               ORDER BY message_id DESC LIMIT 1""",
+            (messageId,),
+        ).fetchone()
+    return str(previousRow[0]) if previousRow else None
+
+
+def getRecentConversation(messageId: int, currentMessage: str, historyLimit: int = 4) -> list[dict[str, str]]:
+    """Build compact chronological model context from completed Telegram turns."""
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        previousRows = connection.execute(
+            """SELECT text, reply_text FROM telegram_messages
+               WHERE message_id < ? AND dispatch_status = 'COMPLETE'
+               ORDER BY message_id DESC LIMIT ?""",
+            (messageId, historyLimit),
+        ).fetchall()
+    messages: list[dict[str, str]] = []
+    for previousText, previousReply in reversed(previousRows):
+        messages.append({"role": "user", "content": str(previousText)})
+        if previousReply:
+            messages.append({"role": "assistant", "content": str(previousReply)})
+    messages.append({"role": "user", "content": currentMessage})
+    return messages
 
 
 def formatResearchEvidence(research: dict[str, object]) -> str:
@@ -304,7 +348,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
         else:
             replyText = createApprovalCard(secrets, messageText)
         if replyText is None:
-            researchQuery = getResearchQuery(messageText)
+            researchQuery = getResearchQuery(messageText, getPreviousUserMessage(messageId))
             if researchQuery is not None:
                 research = postJson(
                     f"{CORE_URL}/v1/research/search",
@@ -326,7 +370,6 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
                     "facts from inference, and preserve numbered citations."
                 )
             else:
-                modelUserContent = messageText
                 modelSystemContent = (
                     "You are Sage, a concise personal assistant. Never claim an approval-gated "
                     "action was completed."
@@ -337,7 +380,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
                 waitForSageModel(secrets)
             modelResponse = postJson(
                 MODEL_URL,
-                {"model": MODEL_ID, "messages": [{"role": "system", "content": modelSystemContent}, {"role": "user", "content": modelUserContent}], "max_tokens": 768, "temperature": 0.4 if researchQuery is not None else 0.7},
+                {"model": MODEL_ID, "messages": [{"role": "system", "content": modelSystemContent}, {"role": "user", "content": modelUserContent}] if researchQuery is not None else [{"role": "system", "content": modelSystemContent}, *getRecentConversation(messageId, messageText)], "max_tokens": 768, "temperature": 0.4 if researchQuery is not None else 0.7},
                 {"Authorization": f"Bearer {secrets['SAGE_MODEL_API_KEY']}", "Content-Type": "application/json"},
             )
             replyText = str(modelResponse["choices"][0]["message"]["content"])

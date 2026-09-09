@@ -95,8 +95,46 @@ def testRecognizesExplicitResearchCommand():
     moduleSpec.loader.exec_module(dispatcher)
 
     assert dispatcher.getResearchQuery("/research current MLX releases") == "current MLX releases"
+    assert (
+        dispatcher.getResearchQuery("Can you look for small sling bags under 1500")
+        == "small sling bags under 1500"
+    )
+    assert dispatcher.getResearchQuery("Please search online for MLX releases") == "MLX releases"
+    assert (
+        dispatcher.getResearchQuery(
+            "You can do that now try it",
+            previousUserMessage="Can you look for small sling bags under 1500",
+        )
+        == "small sling bags under 1500"
+    )
     assert dispatcher.getResearchQuery("what is new?") is None
     assert dispatcher.getResearchQuery("/research   ") is None
+
+
+def testBuildsRecentConversationWithoutCurrentMessageDuplication(tmp_path, monkeypatch):
+    """Ordinary replies receive compact prior Telegram context in chronological order."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherHistory", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    databasePath = tmp_path / "sage.db"
+    with sqlite3.connect(databasePath) as connection:
+        connection.execute(
+            """CREATE TABLE telegram_messages (
+                message_id INTEGER PRIMARY KEY, text TEXT, dispatch_status TEXT,
+                reply_text TEXT
+            )"""
+        )
+        connection.execute("INSERT INTO telegram_messages VALUES (1, 'first', 'COMPLETE', 'answer')")
+        connection.execute("INSERT INTO telegram_messages VALUES (2, 'follow-up', 'PROCESSING', NULL)")
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+
+    assert dispatcher.getRecentConversation(2, "follow-up") == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "follow-up"},
+    ]
 
 
 def testSleepRepliesWithoutCallingModel(tmp_path, monkeypatch):

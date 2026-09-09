@@ -26,6 +26,7 @@ def testSearchPersistsBoundedSourcesAndAuditEvent(tmp_path):
     def fakeSearchRequest(url, payload, headers):
         assert payload["search_depth"] == "basic"
         assert payload["max_results"] == 2
+        assert payload["country"] == "india"
         return {
             "request_id": "request-1",
             "results": [

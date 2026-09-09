@@ -37,3 +37,5 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Explicit `/research <question>` messages use Tavily basic search with at most three sources, then local Trafilatura extraction. Ordinary chat never infers permission to browse.
 - Research provider credentials live only in `/Users/hrudainirmal/SageData/secrets/online.env`; the dispatcher receives only a separate Core research-channel credential.
 - Research source text is framed as untrusted evidence for the model. Public-network URL validation, redirect validation, byte limits, source limits, durable source snapshots, retrieval timestamps, and audit events bound the online surface.
+- General Tavily searches boost Indian results because Sage's configured user locale is New Delhi; the original query remains unchanged in the durable research record.
+- Deterministic natural-language phrases such as “look for”, “search online for”, and “look up” invoke research without requiring a slash command. A direct “try it” follow-up reuses the preceding explicit search request, and ordinary model replies receive four recent completed Telegram turns.
