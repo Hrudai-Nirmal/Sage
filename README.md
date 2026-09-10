@@ -12,7 +12,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
 
-Telegram routing is configured privately for the chosen forum group. The active n8n poller is ingress-only; one native dispatcher owns all replies, scheduled deliveries, and model calls. Google OAuth and skills remain to be implemented after their required credentials and configuration are available.
+Telegram routing is configured privately for the chosen forum group. The active Telegram poller is ingress-only; one native dispatcher owns all replies, scheduled deliveries, and model calls. Google OAuth polling indexes Gmail and Drive for all four configured accounts and Calendar for personal-work every five minutes.
 
 ## Local setup
 
@@ -56,6 +56,14 @@ Runtime modes can be changed locally with `scripts/set-sage-mode.sh <mode>` or f
 - `/shutdown` confirms in Telegram, then stops Sage launch agents, containers, and temporary state. Restart remains local-only.
 
 Use `/research <question>` in the Main Telegram topic for current online research. Explicit natural phrasing such as “look for”, “search online for”, or “look up” works too. Sage retrieves at most three India-boosted sources, extracts readable page content locally, treats all retrieved text as untrusted, and returns a timestamped answer with numbered citations. Ambiguous ordinary conversation does not silently trigger web access.
+
+Google searches in Telegram use only Sage's local post-activation index:
+
+- `/mail [terms]` searches Gmail snapshots from all four accounts.
+- `/calendar [terms]` searches personal-work Calendar events.
+- `/drive [terms]` searches Drive metadata from all four accounts and returns Google view links.
+
+Polling never marks email read, changes labels, archives messages, sends mail, modifies calendar events, downloads Drive file content, or mutates Drive. Those actions require separate policy-gated workflows.
 
 Send a photo, JPEG/PNG/WebP document, or PDF in Main for Iris-assisted analysis. PDFs currently analyze the first rendered page. Telegram-reported sizes are checked when present and downloaded bytes are always capped at 20 MB; temporary files are deleted after the request.
 

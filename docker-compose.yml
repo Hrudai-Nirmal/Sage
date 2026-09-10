@@ -10,6 +10,7 @@ services:
       - ${SAGE_CORE_ENV_FILE:?Set SAGE_CORE_ENV_FILE in .env}
       - ${SAGE_TELEGRAM_ENV_FILE:?Set SAGE_TELEGRAM_ENV_FILE in .env}
       - ${SAGE_ONLINE_ENV_FILE:?Set SAGE_ONLINE_ENV_FILE in .env}
+      - ${SAGE_GOOGLE_ENV_FILE:?Set SAGE_GOOGLE_ENV_FILE in .env}
     environment:
       SAGE_DATA_ROOT: /var/lib/sage
       SAGE_DOWNLOADS_IMPORT_ROOT: /imports/downloads
@@ -26,6 +27,7 @@ services:
       - ${SAGE_N8N_ENV_FILE:?Set SAGE_N8N_ENV_FILE in .env}
       - ${SAGE_TELEGRAM_ENV_FILE:?Set SAGE_TELEGRAM_ENV_FILE in .env}
       - ${SAGE_MODEL_SERVER_ENV_FILE:?Set SAGE_MODEL_SERVER_ENV_FILE in .env}
+      - ${SAGE_GOOGLE_ENV_FILE:?Set SAGE_GOOGLE_ENV_FILE in .env}
     environment:
       GENERIC_TIMEZONE: ${TZ:-Asia/Kolkata}
       # The local poller reads only its private runtime values; no secret is versioned in workflows.

@@ -58,6 +58,9 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "auditEvents": 0,
         "cases": 0,
         "documents": 0,
+        "driveFiles": 0,
+        "emails": 0,
+        "calendarEvents": 0,
         "researchRuns": 0,
         "schedules": 0,
         "tasks": 0,
@@ -67,6 +70,9 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "auditEvents": [],
         "cases": [],
         "documents": [],
+        "driveFiles": [],
+        "emails": [],
+        "calendarEvents": [],
         "researchRuns": [],
         "schedules": [],
         "tasks": [],
@@ -93,6 +99,208 @@ def testRunsAuthenticatedBoundedOnlineResearch(tmp_path):
     assert deniedResponse.status_code == 422
     assert response.status_code == 200
     assert response.json()["sources"][0]["url"] == "https://example.com"
+
+
+def testIndexesFourAccountGmailWithoutChangingRemoteState(tmp_path):
+    """Google polling stores bounded message content once and exposes local search."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        googleAccounts={"personal-work": "work@example.com", "college": "college@example.edu"},
+        googleIngressToken="google-ingress-token",
+    )
+    gmailMessage = {
+        "accountEmail": "work@example.com",
+        "accountKey": "personal-work",
+        "bodyText": "The placement application closes Friday.",
+        "internalDate": "1788998400000",
+        "labelIds": ["INBOX", "UNREAD"],
+        "messageId": "gmail-message-1",
+        "recipients": ["work@example.com"],
+        "sender": "Placement Office <placement@example.edu>",
+        "snippet": "The placement application closes Friday.",
+        "subject": "Placement deadline",
+        "threadId": "gmail-thread-1",
+    }
+
+    with TestClient(app) as client:
+        deniedResponse = client.post("/v1/google/gmail/messages", json=gmailMessage)
+        acceptedResponse = client.post(
+            "/v1/google/gmail/messages",
+            json=gmailMessage,
+            headers={"X-Sage-Google-Ingress-Token": "google-ingress-token"},
+        )
+        duplicateResponse = client.post(
+            "/v1/google/gmail/messages",
+            json=gmailMessage,
+            headers={"X-Sage-Google-Ingress-Token": "google-ingress-token"},
+        )
+        searchResponse = client.get("/v1/emails", params={"query": "placement Friday"})
+
+    assert deniedResponse.status_code == 422
+    assert acceptedResponse.status_code == 201
+    assert acceptedResponse.json() == {"status": "INDEXED"}
+    assert duplicateResponse.status_code == 200
+    assert duplicateResponse.json() == {"status": "DUPLICATE"}
+    assert searchResponse.json() == [
+        {
+            "accountEmail": "work@example.com",
+            "accountKey": "personal-work",
+            "bodyText": "The placement application closes Friday.",
+            "internalDate": "1788998400000",
+            "labelIds": ["INBOX", "UNREAD"],
+            "messageId": "gmail-message-1",
+            "recipients": ["work@example.com"],
+            "sender": "Placement Office <placement@example.edu>",
+            "snippet": "The placement application closes Friday.",
+            "subject": "Placement deadline",
+            "threadId": "gmail-thread-1",
+        }
+    ]
+
+
+def testRejectsGmailMessageAssignedToWrongConfiguredAccount(tmp_path):
+    """A workflow credential cannot attribute one mailbox's mail to another account."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        googleAccounts={"personal-work": "work@example.com"},
+        googleIngressToken="google-ingress-token",
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/google/gmail/messages",
+            json={
+                "accountEmail": "attacker@example.com",
+                "accountKey": "personal-work",
+                "bodyText": "",
+                "internalDate": "1788998400000",
+                "labelIds": ["INBOX"],
+                "messageId": "gmail-message-2",
+                "recipients": ["work@example.com"],
+                "sender": "sender@example.com",
+                "snippet": "Message",
+                "subject": "Subject",
+                "threadId": "gmail-thread-2",
+            },
+            headers={"X-Sage-Google-Ingress-Token": "google-ingress-token"},
+        )
+
+    assert response.status_code == 403
+
+
+def testIndexesPersonalWorkCalendarAndAllAccountDriveFiles(tmp_path):
+    """Google polling exposes local calendar and Drive search without remote writes."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        googleAccounts={"personal-work": "work@example.com", "college": "college@example.edu"},
+        googleCalendarAccountKey="personal-work",
+        googleIngressToken="google-ingress-token",
+    )
+    requestHeaders = {"X-Sage-Google-Ingress-Token": "google-ingress-token"}
+
+    with TestClient(app) as client:
+        calendarResponse = client.post(
+            "/v1/google/calendar/events",
+            json={
+                "accountEmail": "work@example.com",
+                "accountKey": "personal-work",
+                "attendees": ["interviewer@example.com"],
+                "description": "Technical interview",
+                "endAt": "2026-09-12T11:00:00+05:30",
+                "eventId": "event-1",
+                "htmlLink": "https://calendar.google.com/event?eid=1",
+                "location": "Room 201",
+                "startAt": "2026-09-12T10:00:00+05:30",
+                "status": "confirmed",
+                "summary": "Placement interview",
+                "updatedAt": "2026-09-10T09:00:00Z",
+            },
+            headers=requestHeaders,
+        )
+        driveResponse = client.post(
+            "/v1/google/drive/files",
+            json={
+                "accountEmail": "college@example.edu",
+                "accountKey": "college",
+                "createdAt": "2026-09-10T09:00:00Z",
+                "fileId": "file-1",
+                "mimeType": "application/pdf",
+                "modifiedAt": "2026-09-10T10:00:00Z",
+                "name": "Placement handbook.pdf",
+                "owners": ["college@example.edu"],
+                "parents": ["folder-1"],
+                "size": "1234",
+                "webViewLink": "https://drive.google.com/file/d/file-1/view",
+            },
+            headers=requestHeaders,
+        )
+        duplicateCalendarResponse = client.post(
+            "/v1/google/calendar/events",
+            json={
+                "accountEmail": "work@example.com", "accountKey": "personal-work",
+                "attendees": ["interviewer@example.com"], "description": "Technical interview",
+                "endAt": "2026-09-12T11:00:00+05:30", "eventId": "event-1",
+                "htmlLink": "https://calendar.google.com/event?eid=1", "location": "Room 201",
+                "startAt": "2026-09-12T10:00:00+05:30", "status": "confirmed",
+                "summary": "Placement interview", "updatedAt": "2026-09-10T09:00:00Z",
+            },
+            headers=requestHeaders,
+        )
+        duplicateDriveResponse = client.post(
+            "/v1/google/drive/files",
+            json={
+                "accountEmail": "college@example.edu", "accountKey": "college",
+                "createdAt": "2026-09-10T09:00:00Z", "fileId": "file-1",
+                "mimeType": "application/pdf", "modifiedAt": "2026-09-10T10:00:00Z",
+                "name": "Placement handbook.pdf", "owners": ["college@example.edu"],
+                "parents": ["folder-1"], "size": "1234",
+                "webViewLink": "https://drive.google.com/file/d/file-1/view",
+            },
+            headers=requestHeaders,
+        )
+        calendarSearch = client.get("/v1/calendar/events", params={"query": "placement"})
+        driveSearch = client.get("/v1/drive/files", params={"query": "handbook"})
+        auditResponse = client.get("/v1/audit-events")
+
+    assert calendarResponse.status_code == 201
+    assert driveResponse.status_code == 201
+    assert duplicateCalendarResponse.json() == {"status": "DUPLICATE"}
+    assert duplicateDriveResponse.json() == {"status": "DUPLICATE"}
+    assert len(auditResponse.json()) == 2
+    assert calendarSearch.json()[0]["eventId"] == "event-1"
+    assert driveSearch.json()[0]["fileId"] == "file-1"
+
+
+def testRejectsCalendarFromNonCalendarAccount(tmp_path):
+    """Only the explicitly selected personal-work credential can index Calendar."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        googleAccounts={"personal-work": "work@example.com", "college": "college@example.edu"},
+        googleCalendarAccountKey="personal-work",
+        googleIngressToken="google-ingress-token",
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/google/calendar/events",
+            json={
+                "accountEmail": "college@example.edu",
+                "accountKey": "college",
+                "attendees": [],
+                "description": "",
+                "endAt": "2026-09-12",
+                "eventId": "event-2",
+                "htmlLink": "",
+                "location": "",
+                "startAt": "2026-09-11",
+                "status": "confirmed",
+                "summary": "Wrong calendar",
+                "updatedAt": "2026-09-10T09:00:00Z",
+            },
+            headers={"X-Sage-Google-Ingress-Token": "google-ingress-token"},
+        )
+
+    assert response.status_code == 403
 
 
 def testCreatesTaskOnlyAfterApprovalConfirmation(tmp_path):
@@ -331,6 +539,12 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
     downloadsRoot = tmp_path / "Downloads"
     downloadsRoot.mkdir()
     monkeypatch.setenv("SAGE_DOWNLOADS_IMPORT_ROOT", str(downloadsRoot))
+    monkeypatch.setenv(
+        "SAGE_GOOGLE_ACCOUNTS_JSON",
+        '{"personal-work":"work@example.com"}',
+    )
+    monkeypatch.setenv("SAGE_GOOGLE_INGRESS_TOKEN", "google-ingress-token")
+    monkeypatch.setenv("SAGE_GOOGLE_CALENDAR_ACCOUNT_KEY", "personal-work")
     monkeypatch.setenv("SAGE_OPERATOR_TOKEN", "operator-token")
     monkeypatch.setenv("SAGE_PROPOSAL_TOKEN", "proposal-token")
     monkeypatch.setenv("SAGE_RESEARCH_TOKEN", "research-token")
@@ -357,8 +571,26 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
             },
             headers={"X-Sage-Telegram-Ingress-Token": "telegram-ingress-token"},
         )
+        gmailResponse = client.post(
+            "/v1/google/gmail/messages",
+            json={
+                "accountEmail": "work@example.com",
+                "accountKey": "personal-work",
+                "bodyText": "",
+                "internalDate": "1788998400000",
+                "labelIds": ["INBOX"],
+                "messageId": "configured-message",
+                "recipients": ["work@example.com"],
+                "sender": "sender@example.com",
+                "snippet": "Configured",
+                "subject": "Configured Google",
+                "threadId": "configured-thread",
+            },
+            headers={"X-Sage-Google-Ingress-Token": "google-ingress-token"},
+        )
 
     assert response.status_code == 201
+    assert gmailResponse.status_code == 201
 
 
 def testAcceptsOnlyAllowlistedTelegramMessagesFromConfiguredForumTopics(tmp_path):

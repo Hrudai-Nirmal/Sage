@@ -228,6 +228,70 @@ def testRecognizesExplicitResearchCommand():
     assert dispatcher.getResearchQuery("/research   ") is None
 
 
+def testSearchesIndexedMailWithoutCallingGoogle(tmp_path, monkeypatch):
+    """The Telegram mail command searches immutable local snapshots only."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherMail", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    databasePath = tmp_path / "sage.db"
+    with sqlite3.connect(databasePath) as connection:
+        connection.execute(
+            """CREATE TABLE email_messages (
+                account_key TEXT, sender TEXT, subject TEXT, snippet TEXT,
+                body_text TEXT, internal_date TEXT
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO email_messages VALUES (
+                'personal-work', 'Placement Office <placements@example.edu>',
+                'Interview Friday', 'Bring your resume', 'Room 201 at 10 AM',
+                '1789092000000'
+            )"""
+        )
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+
+    assert dispatcher.getMailQuery("/mail@Hrudai_bot placement Friday") == "placement Friday"
+    assert dispatcher.getMailQuery("/mail") == ""
+    assert dispatcher.getMailQuery("show my mail") is None
+    mailReply = dispatcher.formatMailSearch(dispatcher.searchIndexedMail("placement Friday"))
+
+    assert "personal-work" in mailReply
+    assert "Interview Friday" in mailReply
+    assert "placements@example.edu" in mailReply
+    assert "Room 201" in mailReply
+
+
+def testSearchesIndexedCalendarAndDriveWithoutCallingGoogle(tmp_path, monkeypatch):
+    """Telegram search commands read Calendar and Drive snapshots from SQLite only."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherGoogle", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    databasePath = tmp_path / "sage.db"
+    with sqlite3.connect(databasePath) as connection:
+        connection.execute(
+            "CREATE TABLE calendar_events (summary TEXT, description TEXT, location TEXT, start_at TEXT, end_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO calendar_events VALUES ('Placement interview', 'Technical round', 'Room 201', '2026-09-12T10:00:00+05:30', '2026-09-12T11:00:00+05:30')"
+        )
+        connection.execute(
+            "CREATE TABLE drive_files (account_key TEXT, name TEXT, mime_type TEXT, modified_at TEXT, web_view_link TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO drive_files VALUES ('college', 'Placement handbook.pdf', 'application/pdf', '2026-09-10T10:00:00Z', 'https://drive.google.com/file/1')"
+        )
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+
+    assert dispatcher.getLocalSearchCommand("/calendar placement") == ("calendar", "placement")
+    assert dispatcher.getLocalSearchCommand("/drive handbook") == ("drive", "handbook")
+    assert "Placement interview" in dispatcher.formatCalendarSearch(dispatcher.searchIndexedCalendar("placement"))
+    assert "Placement handbook.pdf" in dispatcher.formatDriveSearch(dispatcher.searchIndexedDrive("handbook"))
+
+
 def testBuildsRecentConversationWithoutCurrentMessageDuplication(tmp_path, monkeypatch):
     """Ordinary replies receive compact prior Telegram context in chronological order."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"

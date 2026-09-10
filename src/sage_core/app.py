@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
 from sage_core.document_state import DocumentStateRepository
+from sage_core.google_state import GoogleStateRepository
 from sage_core.online_research import OnlineResearchService
 from sage_core.operator_state import OperatorStateRepository
 from sage_core.operator_ui import getOperatorHtml
@@ -150,9 +151,61 @@ class ResearchSearchPayload(BaseModel):
     query: str = Field(min_length=1, max_length=2_000)
 
 
+class GmailMessagePayload(BaseModel):
+    """Validate one bounded Gmail message snapshot received from n8n."""
+
+    accountEmail: str = Field(min_length=3, max_length=320)
+    accountKey: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+    bodyText: str = Field(max_length=50_000)
+    internalDate: str = Field(min_length=1, max_length=20, pattern=r"^[0-9]+$")
+    labelIds: list[str] = Field(max_length=100)
+    messageId: str = Field(min_length=1, max_length=500)
+    recipients: list[str] = Field(max_length=100)
+    sender: str = Field(max_length=2_000)
+    snippet: str = Field(max_length=10_000)
+    subject: str = Field(max_length=2_000)
+    threadId: str = Field(min_length=1, max_length=500)
+
+
+class CalendarEventPayload(BaseModel):
+    """Validate one bounded Google Calendar event snapshot received from n8n."""
+
+    accountEmail: str = Field(min_length=3, max_length=320)
+    accountKey: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+    attendees: list[str] = Field(max_length=100)
+    description: str = Field(max_length=50_000)
+    endAt: str = Field(min_length=1, max_length=100)
+    eventId: str = Field(min_length=1, max_length=1_000)
+    htmlLink: str = Field(max_length=2_000)
+    location: str = Field(max_length=2_000)
+    startAt: str = Field(min_length=1, max_length=100)
+    status: str = Field(min_length=1, max_length=100)
+    summary: str = Field(max_length=2_000)
+    updatedAt: str = Field(min_length=1, max_length=100)
+
+
+class DriveFilePayload(BaseModel):
+    """Validate one bounded Google Drive metadata snapshot received from n8n."""
+
+    accountEmail: str = Field(min_length=3, max_length=320)
+    accountKey: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+    createdAt: str = Field(min_length=1, max_length=100)
+    fileId: str = Field(min_length=1, max_length=1_000)
+    mimeType: str = Field(min_length=1, max_length=500)
+    modifiedAt: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=2_000)
+    owners: list[str] = Field(max_length=100)
+    parents: list[str] = Field(max_length=100)
+    size: str = Field(max_length=100)
+    webViewLink: str = Field(max_length=2_000)
+
+
 def createApp(
     databasePath: Path,
     dataRoot: Path | None = None,
+    googleAccounts: dict[str, str] | None = None,
+    googleCalendarAccountKey: str | None = None,
+    googleIngressToken: str = "",
     importRoots: dict[str, Path] | None = None,
     operatorToken: str = "",
     proposalToken: str = "",
@@ -175,6 +228,11 @@ def createApp(
         database=database,
         dataRoot=managedDataRoot,
         importRoots=importRoots or {},
+    )
+    googleStateRepository = GoogleStateRepository(
+        database,
+        googleAccounts or {},
+        calendarAccountKey=googleCalendarAccountKey,
     )
     systemStateRepository = SystemStateRepository(database)
     operatorStateRepository = OperatorStateRepository(database)
@@ -289,6 +347,91 @@ def createApp(
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Online research is unavailable")
         try:
             return researchService.searchWeb(researchSearch.query, researchSearch.maxResults)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+    @app.post("/v1/google/gmail/messages", status_code=status.HTTP_201_CREATED)
+    def indexGmailMessage(
+        gmailMessage: GmailMessagePayload,
+        response: Response,
+        sageGoogleIngressToken: str = Header(alias="X-Sage-Google-Ingress-Token"),
+    ) -> dict[str, str]:
+        """Index one authenticated Gmail snapshot without performing a remote mutation."""
+        _validateToken(sageGoogleIngressToken, googleIngressToken)
+        try:
+            isNewMessage = googleStateRepository.indexGmailMessage(gmailMessage.model_dump())
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        if not isNewMessage:
+            response.status_code = status.HTTP_200_OK
+            return {"status": "DUPLICATE"}
+        return {"status": "INDEXED"}
+
+    @app.get("/v1/emails")
+    def searchEmails(
+        query: str = "",
+        accountKey: str | None = None,
+        resultLimit: int = 20,
+    ) -> list[dict[str, object]]:
+        """Search recent local Gmail snapshots for Telegram and the operator interface."""
+        if len(query) > 2_000:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Email query is too long")
+        try:
+            return googleStateRepository.searchGmailMessages(query, accountKey, resultLimit)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+    @app.post("/v1/google/calendar/events", status_code=status.HTTP_201_CREATED)
+    def indexCalendarEvent(
+        calendarEvent: CalendarEventPayload,
+        response: Response,
+        sageGoogleIngressToken: str = Header(alias="X-Sage-Google-Ingress-Token"),
+    ) -> dict[str, str]:
+        """Index one authenticated Calendar snapshot without a remote mutation."""
+        _validateToken(sageGoogleIngressToken, googleIngressToken)
+        try:
+            eventStatus = googleStateRepository.indexCalendarEvent(calendarEvent.model_dump())
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        if eventStatus != "INDEXED":
+            response.status_code = status.HTTP_200_OK
+        return {"status": eventStatus}
+
+    @app.get("/v1/calendar/events")
+    def searchCalendarEvents(query: str = "", resultLimit: int = 20) -> list[dict[str, object]]:
+        """Search local personal-work calendar snapshots."""
+        if len(query) > 2_000:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Calendar query is too long")
+        try:
+            return googleStateRepository.searchCalendarEvents(query, resultLimit)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+    @app.post("/v1/google/drive/files", status_code=status.HTTP_201_CREATED)
+    def indexDriveFile(
+        driveFile: DriveFilePayload,
+        response: Response,
+        sageGoogleIngressToken: str = Header(alias="X-Sage-Google-Ingress-Token"),
+    ) -> dict[str, str]:
+        """Index authenticated Drive metadata without reading or changing file content."""
+        _validateToken(sageGoogleIngressToken, googleIngressToken)
+        try:
+            fileStatus = googleStateRepository.indexDriveFile(driveFile.model_dump())
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        if fileStatus != "INDEXED":
+            response.status_code = status.HTTP_200_OK
+        return {"status": fileStatus}
+
+    @app.get("/v1/drive/files")
+    def searchDriveFiles(
+        query: str = "", accountKey: str | None = None, resultLimit: int = 20,
+    ) -> list[dict[str, object]]:
+        """Search locally indexed Drive metadata without contacting Google."""
+        if len(query) > 2_000:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Drive query is too long")
+        try:
+            return googleStateRepository.searchDriveFiles(query, accountKey, resultLimit)
         except ValueError as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
 

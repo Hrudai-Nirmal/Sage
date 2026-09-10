@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -20,6 +21,11 @@ def createConfiguredApp() -> FastAPI:
         approvalToken=_getRequiredEnvironmentValue("SAGE_APPROVAL_TOKEN"),
         dataRoot=dataRoot,
         databasePath=databasePath,
+        googleAccounts=_getRequiredGoogleAccounts(),
+        googleCalendarAccountKey=_getRequiredEnvironmentValue(
+            "SAGE_GOOGLE_CALENDAR_ACCOUNT_KEY"
+        ),
+        googleIngressToken=_getRequiredEnvironmentValue("SAGE_GOOGLE_INGRESS_TOKEN"),
         importRoots={
             "downloads": _getRequiredEnvironmentPath("SAGE_DOWNLOADS_IMPORT_ROOT"),
         },
@@ -63,3 +69,26 @@ def _getRequiredEnvironmentInteger(name: str) -> int:
         return int(value)
     except ValueError as error:
         raise RuntimeError(f"{name} must be an integer") from error
+
+
+def _getRequiredGoogleAccounts() -> dict[str, str]:
+    """Read a non-empty JSON account map and reject ambiguous runtime configuration."""
+    rawAccountMap = _getRequiredEnvironmentValue("SAGE_GOOGLE_ACCOUNTS_JSON")
+    try:
+        parsedAccountMap = json.loads(rawAccountMap)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("SAGE_GOOGLE_ACCOUNTS_JSON must be valid JSON") from error
+    if not isinstance(parsedAccountMap, dict) or not parsedAccountMap:
+        raise RuntimeError("SAGE_GOOGLE_ACCOUNTS_JSON must be a non-empty object")
+    if not all(
+        isinstance(accountKey, str)
+        and accountKey.strip()
+        and isinstance(accountEmail, str)
+        and accountEmail.strip()
+        for accountKey, accountEmail in parsedAccountMap.items()
+    ):
+        raise RuntimeError("SAGE_GOOGLE_ACCOUNTS_JSON must map non-empty strings to emails")
+    return {
+        accountKey.strip(): accountEmail.strip()
+        for accountKey, accountEmail in parsedAccountMap.items()
+    }

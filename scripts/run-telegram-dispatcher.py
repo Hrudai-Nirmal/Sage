@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ import subprocess
 import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from sage_core.database import SageDatabase
 from sage_core.schedule_state import ScheduleStateRepository
@@ -95,6 +97,150 @@ def getResearchQuery(messageText: str, previousUserMessage: str | None = None) -
     ):
         return getResearchQuery(previousUserMessage)
     return None
+
+
+def getMailQuery(messageText: str) -> str | None:
+    """Return the optional query from an exact Telegram mail command."""
+    commandToken, separator, query = messageText.strip().partition(" ")
+    commandName = commandToken.split("@", 1)[0].lower()
+    if commandName != "/mail":
+        return None
+    return query.strip() if separator else ""
+
+
+def searchIndexedMail(query: str, resultLimit: int = 10) -> list[dict[str, str]]:
+    """Search recent local Gmail snapshots without making a remote Google request."""
+    if resultLimit < 1 or resultLimit > 20:
+        raise ValueError("Mail result limit must be between 1 and 20")
+    queryTerms = [queryTerm.casefold() for queryTerm in query.split() if queryTerm][:10]
+    whereClauses = []
+    queryValues: list[object] = []
+    searchableColumns = "lower(sender || ' ' || subject || ' ' || snippet || ' ' || body_text)"
+    for queryTerm in queryTerms:
+        whereClauses.append(f"{searchableColumns} LIKE ?")
+        queryValues.append(f"%{queryTerm}%")
+    whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
+    queryValues.append(resultLimit)
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        messageRows = connection.execute(
+            f"""SELECT account_key, sender, subject, snippet, body_text, internal_date
+                FROM email_messages {whereSql}
+                ORDER BY CAST(internal_date AS INTEGER) DESC LIMIT ?""",
+            queryValues,
+        ).fetchall()
+    return [
+        {
+            "accountKey": str(accountKey),
+            "bodyText": str(bodyText),
+            "internalDate": str(internalDate),
+            "sender": str(sender),
+            "snippet": str(snippet),
+            "subject": str(subject),
+        }
+        for accountKey, sender, subject, snippet, bodyText, internalDate in messageRows
+    ]
+
+
+def formatMailSearch(messages: list[dict[str, str]]) -> str:
+    """Render a bounded deterministic Telegram summary of locally indexed mail."""
+    if not messages:
+        return "No indexed email matched. Sage checks connected accounts every five minutes."
+    messageSections = []
+    for messageIndex, message in enumerate(messages, start=1):
+        receivedAt = datetime.fromtimestamp(
+            int(message["internalDate"]) / 1_000,
+            tz=ZoneInfo("Asia/Kolkata"),
+        ).strftime("%d %b %Y, %I:%M %p IST")
+        contentPreview = message["bodyText"].strip() or message["snippet"].strip()
+        messageSections.append(
+            f"{messageIndex}. [{message['accountKey']}] {message['subject'] or '(no subject)'}\n"
+            f"From: {message['sender'] or '(unknown sender)'}\n"
+            f"Received: {receivedAt}\n{contentPreview[:500]}"
+        )
+    return ("Indexed email results:\n\n" + "\n\n".join(messageSections))[:4_000]
+
+
+def getLocalSearchCommand(messageText: str) -> tuple[str, str] | None:
+    """Parse exact Calendar or Drive commands without inferring external access."""
+    commandToken, separator, query = messageText.strip().partition(" ")
+    commandName = commandToken.split("@", 1)[0].lower()
+    resourceName = {"/calendar": "calendar", "/drive": "drive"}.get(commandName)
+    if resourceName is None:
+        return None
+    return resourceName, query.strip() if separator else ""
+
+
+def searchIndexedCalendar(query: str, resultLimit: int = 10) -> list[dict[str, str]]:
+    """Search indexed personal-work calendar events from local SQLite."""
+    queryTerms = [queryTerm.casefold() for queryTerm in query.split() if queryTerm][:10]
+    whereClauses = []
+    queryValues: list[object] = []
+    searchableColumns = "lower(summary || ' ' || description || ' ' || location)"
+    for queryTerm in queryTerms:
+        whereClauses.append(f"{searchableColumns} LIKE ?")
+        queryValues.append(f"%{queryTerm}%")
+    whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
+    queryValues.append(resultLimit)
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        eventRows = connection.execute(
+            f"""SELECT summary, description, location, start_at, end_at
+                FROM calendar_events {whereSql} ORDER BY start_at LIMIT ?""",
+            queryValues,
+        ).fetchall()
+    return [
+        {"summary": str(summary), "description": str(description), "location": str(location),
+         "startAt": str(startAt), "endAt": str(endAt)}
+        for summary, description, location, startAt, endAt in eventRows
+    ]
+
+
+def formatCalendarSearch(events: list[dict[str, str]]) -> str:
+    """Render bounded Calendar results for Telegram."""
+    if not events:
+        return "No indexed personal-work calendar event matched."
+    sections = [
+        f"{index}. {event['summary'] or '(untitled event)'}\n"
+        f"{event['startAt']} to {event['endAt']}\n"
+        f"{event['location'] or 'No location'}\n{event['description'][:400]}"
+        for index, event in enumerate(events, start=1)
+    ]
+    return ("Calendar results:\n\n" + "\n\n".join(sections))[:4_000]
+
+
+def searchIndexedDrive(query: str, resultLimit: int = 10) -> list[dict[str, str]]:
+    """Search indexed Drive metadata from local SQLite without reading file content."""
+    queryTerms = [queryTerm.casefold() for queryTerm in query.split() if queryTerm][:10]
+    whereClauses = []
+    queryValues: list[object] = []
+    for queryTerm in queryTerms:
+        whereClauses.append("lower(name || ' ' || mime_type) LIKE ?")
+        queryValues.append(f"%{queryTerm}%")
+    whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
+    queryValues.append(resultLimit)
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        fileRows = connection.execute(
+            f"""SELECT account_key, name, mime_type, modified_at, web_view_link
+                FROM drive_files {whereSql} ORDER BY modified_at DESC LIMIT ?""",
+            queryValues,
+        ).fetchall()
+    return [
+        {"accountKey": str(accountKey), "name": str(name), "mimeType": str(mimeType),
+         "modifiedAt": str(modifiedAt), "webViewLink": str(webViewLink)}
+        for accountKey, name, mimeType, modifiedAt, webViewLink in fileRows
+    ]
+
+
+def formatDriveSearch(files: list[dict[str, str]]) -> str:
+    """Render bounded Drive metadata with provider-returned live URLs."""
+    if not files:
+        return "No indexed Google Drive file matched."
+    sections = [
+        f"{index}. [{driveFile['accountKey']}] {driveFile['name']}\n"
+        f"Type: {driveFile['mimeType']} | Modified: {driveFile['modifiedAt']}\n"
+        f"{driveFile['webViewLink']}"
+        for index, driveFile in enumerate(files, start=1)
+    ]
+    return ("Drive results:\n\n" + "\n\n".join(sections))[:4_000]
 
 
 def getPreviousUserMessage(messageId: int) -> str | None:
@@ -677,6 +823,17 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
                 formatResearchSources(latestResearch)
                 if latestResearch is not None
                 else "No previous research sources are available yet."
+            )
+            sendTelegramMessage(secrets, replyText)
+        if replyText is None and (mailQuery := getMailQuery(messageText)) is not None:
+            replyText = formatMailSearch(searchIndexedMail(mailQuery))
+            sendTelegramMessage(secrets, replyText)
+        if replyText is None and (localSearch := getLocalSearchCommand(messageText)) is not None:
+            resourceName, localQuery = localSearch
+            replyText = (
+                formatCalendarSearch(searchIndexedCalendar(localQuery))
+                if resourceName == "calendar"
+                else formatDriveSearch(searchIndexedDrive(localQuery))
             )
             sendTelegramMessage(secrets, replyText)
         if replyText is None:

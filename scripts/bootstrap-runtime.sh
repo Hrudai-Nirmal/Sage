@@ -54,6 +54,14 @@ if [[ ! -f "${secretRoot}/online.env" ]]; then
   print "TAVILY_API_KEY=" > "${secretRoot}/online.env"
 fi
 
+if [[ ! -f "${secretRoot}/google.env" ]]; then
+  {
+    print "SAGE_GOOGLE_INGRESS_TOKEN=$(openssl rand -hex 32)"
+    print "SAGE_GOOGLE_CALENDAR_ACCOUNT_KEY=personal-work"
+    print 'SAGE_GOOGLE_ACCOUNTS_JSON={}'
+  } > "${secretRoot}/google.env"
+fi
+
 if [[ ! -f "${secretRoot}/model-server.env" ]]; then
   print "SAGE_MODEL_API_KEY=$(openssl rand -hex 32)" > "${secretRoot}/model-server.env"
 fi
@@ -75,6 +83,7 @@ if [[ ! -f "${sageProjectRoot}/.env" ]]; then
     print "SAGE_TELEGRAM_ENV_FILE=${secretRoot}/telegram.env"
     print "SAGE_MODEL_SERVER_ENV_FILE=${secretRoot}/model-server.env"
     print "SAGE_ONLINE_ENV_FILE=${secretRoot}/online.env"
+    print "SAGE_GOOGLE_ENV_FILE=${secretRoot}/google.env"
     print "SAGE_DOWNLOADS_HOST_PATH=/Users/hrudainirmal/Downloads"
     print "TZ=Asia/Kolkata"
   } > "${sageProjectRoot}/.env"
@@ -95,4 +104,8 @@ fi
 
 if ! grep -q '^SAGE_ONLINE_ENV_FILE=' "${sageProjectRoot}/.env"; then
   print "SAGE_ONLINE_ENV_FILE=${secretRoot}/online.env" >> "${sageProjectRoot}/.env"
+fi
+
+if ! grep -q '^SAGE_GOOGLE_ENV_FILE=' "${sageProjectRoot}/.env"; then
+  print "SAGE_GOOGLE_ENV_FILE=${secretRoot}/google.env" >> "${sageProjectRoot}/.env"
 fi

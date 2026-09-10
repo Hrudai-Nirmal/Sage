@@ -22,7 +22,10 @@ class OperatorStateRepository:
             "approvals": "SELECT COUNT(*) FROM approval_requests WHERE status = 'PENDING'",
             "auditEvents": "SELECT COUNT(*) FROM audit_events",
             "cases": "SELECT COUNT(*) FROM cases WHERE status = 'ACTIVE'",
+            "calendarEvents": "SELECT COUNT(*) FROM calendar_events",
             "documents": "SELECT COUNT(*) FROM documents",
+            "driveFiles": "SELECT COUNT(*) FROM drive_files",
+            "emails": "SELECT COUNT(*) FROM email_messages",
             "researchRuns": "SELECT COUNT(*) FROM research_runs",
             "schedules": "SELECT COUNT(*) FROM schedules WHERE status = 'ACTIVE'",
             "tasks": "SELECT COUNT(*) FROM tasks WHERE status = 'OPEN'",
@@ -49,6 +52,18 @@ class OperatorStateRepository:
             ).fetchall()
             documentRows = connection.execute(
                 "SELECT canonical_name, original_name, imported_at FROM documents ORDER BY imported_at DESC LIMIT 20"
+            ).fetchall()
+            emailRows = connection.execute(
+                """SELECT account_key, sender, subject, internal_date
+                   FROM email_messages ORDER BY CAST(internal_date AS INTEGER) DESC LIMIT 20"""
+            ).fetchall()
+            calendarRows = connection.execute(
+                """SELECT summary, start_at, end_at, location
+                   FROM calendar_events ORDER BY start_at LIMIT 20"""
+            ).fetchall()
+            driveRows = connection.execute(
+                """SELECT account_key, name, mime_type, modified_at
+                   FROM drive_files ORDER BY modified_at DESC LIMIT 20"""
             ).fetchall()
             researchRows = connection.execute(
                 "SELECT query, retrieved_at FROM research_runs ORDER BY retrieved_at DESC LIMIT 20"
@@ -85,9 +100,21 @@ class OperatorStateRepository:
                 {"objective": objective, "status": caseStatus, "title": title}
                 for title, objective, caseStatus in caseRows
             ],
+            "calendarEvents": [
+                {"endAt": endAt, "location": location, "startAt": startAt, "summary": summary}
+                for summary, startAt, endAt, location in calendarRows
+            ],
             "documents": [
                 {"importedAt": importedAt, "name": canonicalName, "originalName": originalName}
                 for canonicalName, originalName, importedAt in documentRows
+            ],
+            "driveFiles": [
+                {"accountKey": accountKey, "mimeType": mimeType, "modifiedAt": modifiedAt, "name": name}
+                for accountKey, name, mimeType, modifiedAt in driveRows
+            ],
+            "emails": [
+                {"accountKey": accountKey, "internalDate": internalDate, "sender": sender, "subject": subject}
+                for accountKey, sender, subject, internalDate in emailRows
             ],
             "researchRuns": [
                 {"query": query, "retrievedAt": retrievedAt}

@@ -96,6 +96,55 @@ class SageDatabase:
                     sources_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS email_messages (
+                    account_key TEXT NOT NULL,
+                    account_email TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    sender TEXT NOT NULL,
+                    recipients_json TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    snippet TEXT NOT NULL,
+                    body_text TEXT NOT NULL,
+                    label_ids_json TEXT NOT NULL,
+                    internal_date TEXT NOT NULL,
+                    indexed_at TEXT NOT NULL,
+                    PRIMARY KEY (account_key, message_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS calendar_events (
+                    account_key TEXT NOT NULL,
+                    account_email TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    location TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    start_at TEXT NOT NULL,
+                    end_at TEXT NOT NULL,
+                    html_link TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    attendees_json TEXT NOT NULL,
+                    indexed_at TEXT NOT NULL,
+                    PRIMARY KEY (account_key, event_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS drive_files (
+                    account_key TEXT NOT NULL,
+                    account_email TEXT NOT NULL,
+                    file_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    modified_at TEXT NOT NULL,
+                    web_view_link TEXT NOT NULL,
+                    parents_json TEXT NOT NULL,
+                    owners_json TEXT NOT NULL,
+                    size TEXT NOT NULL,
+                    indexed_at TEXT NOT NULL,
+                    PRIMARY KEY (account_key, file_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS schedules (
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,

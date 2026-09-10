@@ -1,0 +1,341 @@
+{
+  "id": "sageGoogleGmail01",
+  "name": "Sage Google Gmail Poller",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 5}]}},
+      "id": "google-gmail-schedule",
+      "name": "Poll Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "updatedMin", "value": "__ACTIVATED_ISO__"}, {"name": "showDeleted", "value": false}, {"name": "singleEvents", "value": true}, {"name": "maxResults", "value": 2500}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__PERSONAL_WORK_CREDENTIAL_ID__", "name": "__PERSONAL_WORK_CREDENTIAL_NAME__"}},
+      "id": "list-calendar-personal-work",
+      "name": "List Calendar personal-work",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 800]
+    },
+    {
+      "parameters": {"jsCode": "const events = Array.isArray($json.items) ? $json.items : [];\nreturn events.map((event) => ({ json: { accountEmail: '__PERSONAL_WORK_EMAIL__', accountKey: 'personal-work', attendees: (event.attendees ?? []).map((attendee) => String(attendee.email ?? '')).filter(Boolean).slice(0, 100), description: String(event.description ?? '').slice(0, 50000), endAt: String(event.end?.dateTime ?? event.end?.date ?? ''), eventId: String(event.id), htmlLink: String(event.htmlLink ?? '').slice(0, 2000), location: String(event.location ?? '').slice(0, 2000), startAt: String(event.start?.dateTime ?? event.start?.date ?? ''), status: String(event.status ?? 'confirmed'), summary: String(event.summary ?? '').slice(0, 2000), updatedAt: String(event.updated) } }));"},
+      "id": "normalize-calendar-personal-work",
+      "name": "Normalize Calendar personal-work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 800]
+    },
+    {
+      "parameters": {"authentication": "predefinedCredentialType", "nodeCredentialType": "googleOAuth2Api", "method": "GET", "url": "https://www.googleapis.com/drive/v3/files", "sendQuery": true, "queryParameters": {"parameters": [{"name": "q", "value": "modifiedTime > '__ACTIVATED_ISO__' and trashed = false"}, {"name": "pageSize", "value": 1000}, {"name": "orderBy", "value": "modifiedTime desc"}, {"name": "fields", "value": "files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)"}]}, "options": {}},
+      "credentials": {"googleOAuth2Api": {"id": "__PERSONAL_WORK_CREDENTIAL_ID__", "name": "__PERSONAL_WORK_CREDENTIAL_NAME__"}},
+      "id": "list-drive-personal-work", "name": "List Drive personal-work", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [240, 1000]
+    },
+    {
+      "parameters": {"jsCode": "const files = Array.isArray($json.files) ? $json.files : [];\nreturn files.map((file) => ({ json: { accountEmail: '__PERSONAL_WORK_EMAIL__', accountKey: 'personal-work', createdAt: String(file.createdTime ?? file.modifiedTime), fileId: String(file.id), mimeType: String(file.mimeType), modifiedAt: String(file.modifiedTime), name: String(file.name).slice(0, 2000), owners: (file.owners ?? []).map((owner) => String(owner.emailAddress ?? owner.displayName ?? '')).filter(Boolean).slice(0, 100), parents: (file.parents ?? []).map(String).slice(0, 100), size: String(file.size ?? ''), webViewLink: String(file.webViewLink ?? '').slice(0, 2000) } }));"},
+      "id": "normalize-drive-personal-work", "name": "Normalize Drive personal-work", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 1000]
+    },
+    {
+      "parameters": {"authentication": "predefinedCredentialType", "nodeCredentialType": "googleOAuth2Api", "method": "GET", "url": "https://www.googleapis.com/drive/v3/files", "sendQuery": true, "queryParameters": {"parameters": [{"name": "q", "value": "modifiedTime > '__ACTIVATED_ISO__' and trashed = false"}, {"name": "pageSize", "value": 1000}, {"name": "orderBy", "value": "modifiedTime desc"}, {"name": "fields", "value": "files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)"}]}, "options": {}},
+      "credentials": {"googleOAuth2Api": {"id": "__WORK_CREDENTIAL_ID__", "name": "__WORK_CREDENTIAL_NAME__"}},
+      "id": "list-drive-work", "name": "List Drive work", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [240, 1200]
+    },
+    {
+      "parameters": {"jsCode": "const files = Array.isArray($json.files) ? $json.files : [];\nreturn files.map((file) => ({ json: { accountEmail: '__WORK_EMAIL__', accountKey: 'work', createdAt: String(file.createdTime ?? file.modifiedTime), fileId: String(file.id), mimeType: String(file.mimeType), modifiedAt: String(file.modifiedTime), name: String(file.name).slice(0, 2000), owners: (file.owners ?? []).map((owner) => String(owner.emailAddress ?? owner.displayName ?? '')).filter(Boolean).slice(0, 100), parents: (file.parents ?? []).map(String).slice(0, 100), size: String(file.size ?? ''), webViewLink: String(file.webViewLink ?? '').slice(0, 2000) } }));"},
+      "id": "normalize-drive-work", "name": "Normalize Drive work", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 1200]
+    },
+    {
+      "parameters": {"authentication": "predefinedCredentialType", "nodeCredentialType": "googleOAuth2Api", "method": "GET", "url": "https://www.googleapis.com/drive/v3/files", "sendQuery": true, "queryParameters": {"parameters": [{"name": "q", "value": "modifiedTime > '__ACTIVATED_ISO__' and trashed = false"}, {"name": "pageSize", "value": 1000}, {"name": "orderBy", "value": "modifiedTime desc"}, {"name": "fields", "value": "files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)"}]}, "options": {}},
+      "credentials": {"googleOAuth2Api": {"id": "__PERSONAL_CREDENTIAL_ID__", "name": "__PERSONAL_CREDENTIAL_NAME__"}},
+      "id": "list-drive-personal", "name": "List Drive personal", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [240, 1400]
+    },
+    {
+      "parameters": {"jsCode": "const files = Array.isArray($json.files) ? $json.files : [];\nreturn files.map((file) => ({ json: { accountEmail: '__PERSONAL_EMAIL__', accountKey: 'personal', createdAt: String(file.createdTime ?? file.modifiedTime), fileId: String(file.id), mimeType: String(file.mimeType), modifiedAt: String(file.modifiedTime), name: String(file.name).slice(0, 2000), owners: (file.owners ?? []).map((owner) => String(owner.emailAddress ?? owner.displayName ?? '')).filter(Boolean).slice(0, 100), parents: (file.parents ?? []).map(String).slice(0, 100), size: String(file.size ?? ''), webViewLink: String(file.webViewLink ?? '').slice(0, 2000) } }));"},
+      "id": "normalize-drive-personal", "name": "Normalize Drive personal", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 1400]
+    },
+    {
+      "parameters": {"authentication": "predefinedCredentialType", "nodeCredentialType": "googleOAuth2Api", "method": "GET", "url": "https://www.googleapis.com/drive/v3/files", "sendQuery": true, "queryParameters": {"parameters": [{"name": "q", "value": "modifiedTime > '__ACTIVATED_ISO__' and trashed = false"}, {"name": "pageSize", "value": 1000}, {"name": "orderBy", "value": "modifiedTime desc"}, {"name": "fields", "value": "files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)"}]}, "options": {}},
+      "credentials": {"googleOAuth2Api": {"id": "__COLLEGE_CREDENTIAL_ID__", "name": "__COLLEGE_CREDENTIAL_NAME__"}},
+      "id": "list-drive-college", "name": "List Drive college", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [240, 1600]
+    },
+    {
+      "parameters": {"jsCode": "const files = Array.isArray($json.files) ? $json.files : [];\nreturn files.map((file) => ({ json: { accountEmail: '__COLLEGE_EMAIL__', accountKey: 'college', createdAt: String(file.createdTime ?? file.modifiedTime), fileId: String(file.id), mimeType: String(file.mimeType), modifiedAt: String(file.modifiedTime), name: String(file.name).slice(0, 2000), owners: (file.owners ?? []).map((owner) => String(owner.emailAddress ?? owner.displayName ?? '')).filter(Boolean).slice(0, 100), parents: (file.parents ?? []).map(String).slice(0, 100), size: String(file.size ?? ''), webViewLink: String(file.webViewLink ?? '').slice(0, 2000) } }));"},
+      "id": "normalize-drive-college", "name": "Normalize Drive college", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 1600]
+    },
+    {
+      "parameters": {"method": "POST", "url": "http://sage-core:8787/v1/google/calendar/events", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "X-Sage-Google-Ingress-Token", "value": "={{ $env.SAGE_GOOGLE_INGRESS_TOKEN }}"}]}, "sendBody": true, "contentType": "json", "specifyBody": "json", "jsonBody": "={{ $json }}", "options": {}},
+      "id": "index-calendar-core", "name": "Index Calendar in Sage Core", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1240, 800]
+    },
+    {
+      "parameters": {"method": "POST", "url": "http://sage-core:8787/v1/google/drive/files", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "X-Sage-Google-Ingress-Token", "value": "={{ $env.SAGE_GOOGLE_INGRESS_TOKEN }}"}]}, "sendBody": true, "contentType": "json", "specifyBody": "json", "jsonBody": "={{ $json }}", "options": {}},
+      "id": "index-drive-core", "name": "Index Drive in Sage Core", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1240, 1300]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "includeSpamTrash", "value": false}, {"name": "maxResults", "value": 100}, {"name": "q", "value": "after:__ACTIVATED_UNIX__"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__PERSONAL_WORK_CREDENTIAL_ID__", "name": "__PERSONAL_WORK_CREDENTIAL_NAME__"}},
+      "id": "list-personal-work",
+      "name": "List Gmail personal-work",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {"jsCode": "const messages = Array.isArray($json.messages) ? $json.messages : [];\nreturn messages.map((message) => ({ json: { messageId: message.id } }));"},
+      "id": "expand-personal-work",
+      "name": "Expand Gmail personal-work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "={{ 'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + $json.messageId }}",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "format", "value": "full"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__PERSONAL_WORK_CREDENTIAL_ID__", "name": "__PERSONAL_WORK_CREDENTIAL_NAME__"}},
+      "id": "get-personal-work",
+      "name": "Get Gmail personal-work",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 0]
+    },
+    {
+      "parameters": {"jsCode": "const gmailMessage = $json;\nconst headers = Object.fromEntries((gmailMessage.payload?.headers ?? []).map((header) => [String(header.name).toLowerCase(), String(header.value ?? '')]));\nconst decodeBody = (encodedBody) => { const normalized = String(encodedBody ?? '').replace(/-/g, '+').replace(/_/g, '/'); const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4); return Buffer.from(padded, 'base64').toString('utf8'); };\nconst collectParts = (part, mimeType) => { const ownText = part?.mimeType === mimeType && part.body?.data ? [decodeBody(part.body.data)] : []; return ownText.concat((part?.parts ?? []).flatMap((childPart) => collectParts(childPart, mimeType))); };\nconst plainText = collectParts(gmailMessage.payload, 'text/plain').join('\\n').trim();\nconst htmlText = collectParts(gmailMessage.payload, 'text/html').join('\\n').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\nreturn [{ json: { accountEmail: '__PERSONAL_WORK_EMAIL__', accountKey: 'personal-work', bodyText: (plainText || htmlText).slice(0, 50000), internalDate: String(gmailMessage.internalDate), labelIds: Array.isArray(gmailMessage.labelIds) ? gmailMessage.labelIds.slice(0, 100) : [], messageId: String(gmailMessage.id), recipients: [headers.to, headers.cc, headers.bcc].filter(Boolean).slice(0, 100), sender: (headers.from ?? '').slice(0, 2000), snippet: String(gmailMessage.snippet ?? '').slice(0, 10000), subject: (headers.subject ?? '').slice(0, 2000), threadId: String(gmailMessage.threadId) } }];"},
+      "id": "normalize-personal-work",
+      "name": "Normalize Gmail personal-work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 0]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "includeSpamTrash", "value": false}, {"name": "maxResults", "value": 100}, {"name": "q", "value": "after:__ACTIVATED_UNIX__"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__WORK_CREDENTIAL_ID__", "name": "__WORK_CREDENTIAL_NAME__"}},
+      "id": "list-work",
+      "name": "List Gmail work",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 200]
+    },
+    {
+      "parameters": {"jsCode": "const messages = Array.isArray($json.messages) ? $json.messages : [];\nreturn messages.map((message) => ({ json: { messageId: message.id } }));"},
+      "id": "expand-work",
+      "name": "Expand Gmail work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "={{ 'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + $json.messageId }}",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "format", "value": "full"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__WORK_CREDENTIAL_ID__", "name": "__WORK_CREDENTIAL_NAME__"}},
+      "id": "get-work",
+      "name": "Get Gmail work",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 200]
+    },
+    {
+      "parameters": {"jsCode": "const gmailMessage = $json;\nconst headers = Object.fromEntries((gmailMessage.payload?.headers ?? []).map((header) => [String(header.name).toLowerCase(), String(header.value ?? '')]));\nconst decodeBody = (encodedBody) => { const normalized = String(encodedBody ?? '').replace(/-/g, '+').replace(/_/g, '/'); const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4); return Buffer.from(padded, 'base64').toString('utf8'); };\nconst collectParts = (part, mimeType) => { const ownText = part?.mimeType === mimeType && part.body?.data ? [decodeBody(part.body.data)] : []; return ownText.concat((part?.parts ?? []).flatMap((childPart) => collectParts(childPart, mimeType))); };\nconst plainText = collectParts(gmailMessage.payload, 'text/plain').join('\\n').trim();\nconst htmlText = collectParts(gmailMessage.payload, 'text/html').join('\\n').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\nreturn [{ json: { accountEmail: '__WORK_EMAIL__', accountKey: 'work', bodyText: (plainText || htmlText).slice(0, 50000), internalDate: String(gmailMessage.internalDate), labelIds: Array.isArray(gmailMessage.labelIds) ? gmailMessage.labelIds.slice(0, 100) : [], messageId: String(gmailMessage.id), recipients: [headers.to, headers.cc, headers.bcc].filter(Boolean).slice(0, 100), sender: (headers.from ?? '').slice(0, 2000), snippet: String(gmailMessage.snippet ?? '').slice(0, 10000), subject: (headers.subject ?? '').slice(0, 2000), threadId: String(gmailMessage.threadId) } }];"},
+      "id": "normalize-work",
+      "name": "Normalize Gmail work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "includeSpamTrash", "value": false}, {"name": "maxResults", "value": 100}, {"name": "q", "value": "after:__ACTIVATED_UNIX__"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__PERSONAL_CREDENTIAL_ID__", "name": "__PERSONAL_CREDENTIAL_NAME__"}},
+      "id": "list-personal",
+      "name": "List Gmail personal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {"jsCode": "const messages = Array.isArray($json.messages) ? $json.messages : [];\nreturn messages.map((message) => ({ json: { messageId: message.id } }));"},
+      "id": "expand-personal",
+      "name": "Expand Gmail personal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 400]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "={{ 'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + $json.messageId }}",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "format", "value": "full"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__PERSONAL_CREDENTIAL_ID__", "name": "__PERSONAL_CREDENTIAL_NAME__"}},
+      "id": "get-personal",
+      "name": "Get Gmail personal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 400]
+    },
+    {
+      "parameters": {"jsCode": "const gmailMessage = $json;\nconst headers = Object.fromEntries((gmailMessage.payload?.headers ?? []).map((header) => [String(header.name).toLowerCase(), String(header.value ?? '')]));\nconst decodeBody = (encodedBody) => { const normalized = String(encodedBody ?? '').replace(/-/g, '+').replace(/_/g, '/'); const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4); return Buffer.from(padded, 'base64').toString('utf8'); };\nconst collectParts = (part, mimeType) => { const ownText = part?.mimeType === mimeType && part.body?.data ? [decodeBody(part.body.data)] : []; return ownText.concat((part?.parts ?? []).flatMap((childPart) => collectParts(childPart, mimeType))); };\nconst plainText = collectParts(gmailMessage.payload, 'text/plain').join('\\n').trim();\nconst htmlText = collectParts(gmailMessage.payload, 'text/html').join('\\n').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\nreturn [{ json: { accountEmail: '__PERSONAL_EMAIL__', accountKey: 'personal', bodyText: (plainText || htmlText).slice(0, 50000), internalDate: String(gmailMessage.internalDate), labelIds: Array.isArray(gmailMessage.labelIds) ? gmailMessage.labelIds.slice(0, 100) : [], messageId: String(gmailMessage.id), recipients: [headers.to, headers.cc, headers.bcc].filter(Boolean).slice(0, 100), sender: (headers.from ?? '').slice(0, 2000), snippet: String(gmailMessage.snippet ?? '').slice(0, 10000), subject: (headers.subject ?? '').slice(0, 2000), threadId: String(gmailMessage.threadId) } }];"},
+      "id": "normalize-personal",
+      "name": "Normalize Gmail personal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 400]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "includeSpamTrash", "value": false}, {"name": "maxResults", "value": 100}, {"name": "q", "value": "after:__ACTIVATED_UNIX__"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__COLLEGE_CREDENTIAL_ID__", "name": "__COLLEGE_CREDENTIAL_NAME__"}},
+      "id": "list-college",
+      "name": "List Gmail college",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 600]
+    },
+    {
+      "parameters": {"jsCode": "const messages = Array.isArray($json.messages) ? $json.messages : [];\nreturn messages.map((message) => ({ json: { messageId: message.id } }));"},
+      "id": "expand-college",
+      "name": "Expand Gmail college",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 600]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "GET",
+        "url": "={{ 'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + $json.messageId }}",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "format", "value": "full"}]},
+        "options": {}
+      },
+      "credentials": {"googleOAuth2Api": {"id": "__COLLEGE_CREDENTIAL_ID__", "name": "__COLLEGE_CREDENTIAL_NAME__"}},
+      "id": "get-college",
+      "name": "Get Gmail college",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 600]
+    },
+    {
+      "parameters": {"jsCode": "const gmailMessage = $json;\nconst headers = Object.fromEntries((gmailMessage.payload?.headers ?? []).map((header) => [String(header.name).toLowerCase(), String(header.value ?? '')]));\nconst decodeBody = (encodedBody) => { const normalized = String(encodedBody ?? '').replace(/-/g, '+').replace(/_/g, '/'); const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4); return Buffer.from(padded, 'base64').toString('utf8'); };\nconst collectParts = (part, mimeType) => { const ownText = part?.mimeType === mimeType && part.body?.data ? [decodeBody(part.body.data)] : []; return ownText.concat((part?.parts ?? []).flatMap((childPart) => collectParts(childPart, mimeType))); };\nconst plainText = collectParts(gmailMessage.payload, 'text/plain').join('\\n').trim();\nconst htmlText = collectParts(gmailMessage.payload, 'text/html').join('\\n').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\nreturn [{ json: { accountEmail: '__COLLEGE_EMAIL__', accountKey: 'college', bodyText: (plainText || htmlText).slice(0, 50000), internalDate: String(gmailMessage.internalDate), labelIds: Array.isArray(gmailMessage.labelIds) ? gmailMessage.labelIds.slice(0, 100) : [], messageId: String(gmailMessage.id), recipients: [headers.to, headers.cc, headers.bcc].filter(Boolean).slice(0, 100), sender: (headers.from ?? '').slice(0, 2000), snippet: String(gmailMessage.snippet ?? '').slice(0, 10000), subject: (headers.subject ?? '').slice(0, 2000), threadId: String(gmailMessage.threadId) } }];"},
+      "id": "normalize-college",
+      "name": "Normalize Gmail college",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://sage-core:8787/v1/google/gmail/messages",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "X-Sage-Google-Ingress-Token", "value": "={{ $env.SAGE_GOOGLE_INGRESS_TOKEN }}"}]},
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "index-core",
+      "name": "Index in Sage Core",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1240, 300]
+    }
+  ],
+  "connections": {
+    "Poll Every 5 Minutes": {"main": [[
+      {"node": "List Gmail personal-work", "type": "main", "index": 0},
+      {"node": "List Gmail work", "type": "main", "index": 0},
+      {"node": "List Gmail personal", "type": "main", "index": 0},
+      {"node": "List Gmail college", "type": "main", "index": 0},
+      {"node": "List Calendar personal-work", "type": "main", "index": 0},
+      {"node": "List Drive personal-work", "type": "main", "index": 0},
+      {"node": "List Drive work", "type": "main", "index": 0},
+      {"node": "List Drive personal", "type": "main", "index": 0},
+      {"node": "List Drive college", "type": "main", "index": 0}
+    ]]},
+    "List Gmail personal-work": {"main": [[{"node": "Expand Gmail personal-work", "type": "main", "index": 0}]]},
+    "Expand Gmail personal-work": {"main": [[{"node": "Get Gmail personal-work", "type": "main", "index": 0}]]},
+    "Get Gmail personal-work": {"main": [[{"node": "Normalize Gmail personal-work", "type": "main", "index": 0}]]},
+    "Normalize Gmail personal-work": {"main": [[{"node": "Index in Sage Core", "type": "main", "index": 0}]]},
+    "List Gmail work": {"main": [[{"node": "Expand Gmail work", "type": "main", "index": 0}]]},
+    "Expand Gmail work": {"main": [[{"node": "Get Gmail work", "type": "main", "index": 0}]]},
+    "Get Gmail work": {"main": [[{"node": "Normalize Gmail work", "type": "main", "index": 0}]]},
+    "Normalize Gmail work": {"main": [[{"node": "Index in Sage Core", "type": "main", "index": 0}]]},
+    "List Gmail personal": {"main": [[{"node": "Expand Gmail personal", "type": "main", "index": 0}]]},
+    "Expand Gmail personal": {"main": [[{"node": "Get Gmail personal", "type": "main", "index": 0}]]},
+    "Get Gmail personal": {"main": [[{"node": "Normalize Gmail personal", "type": "main", "index": 0}]]},
+    "Normalize Gmail personal": {"main": [[{"node": "Index in Sage Core", "type": "main", "index": 0}]]},
+    "List Gmail college": {"main": [[{"node": "Expand Gmail college", "type": "main", "index": 0}]]},
+    "Expand Gmail college": {"main": [[{"node": "Get Gmail college", "type": "main", "index": 0}]]},
+    "Get Gmail college": {"main": [[{"node": "Normalize Gmail college", "type": "main", "index": 0}]]},
+    "Normalize Gmail college": {"main": [[{"node": "Index in Sage Core", "type": "main", "index": 0}]]},
+    "List Calendar personal-work": {"main": [[{"node": "Normalize Calendar personal-work", "type": "main", "index": 0}]]},
+    "Normalize Calendar personal-work": {"main": [[{"node": "Index Calendar in Sage Core", "type": "main", "index": 0}]]},
+    "List Drive personal-work": {"main": [[{"node": "Normalize Drive personal-work", "type": "main", "index": 0}]]},
+    "Normalize Drive personal-work": {"main": [[{"node": "Index Drive in Sage Core", "type": "main", "index": 0}]]},
+    "List Drive work": {"main": [[{"node": "Normalize Drive work", "type": "main", "index": 0}]]},
+    "Normalize Drive work": {"main": [[{"node": "Index Drive in Sage Core", "type": "main", "index": 0}]]},
+    "List Drive personal": {"main": [[{"node": "Normalize Drive personal", "type": "main", "index": 0}]]},
+    "Normalize Drive personal": {"main": [[{"node": "Index Drive in Sage Core", "type": "main", "index": 0}]]},
+    "List Drive college": {"main": [[{"node": "Normalize Drive college", "type": "main", "index": 0}]]},
+    "Normalize Drive college": {"main": [[{"node": "Index Drive in Sage Core", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}
