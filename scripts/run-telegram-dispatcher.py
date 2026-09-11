@@ -103,12 +103,28 @@ def getResearchQuery(messageText: str, previousUserMessage: str | None = None) -
 
 
 def getMailQuery(messageText: str) -> str | None:
-    """Return the optional query from an exact Telegram mail command."""
+    """Return a query from an exact command or deterministic Gmail wording."""
     commandToken, separator, query = messageText.strip().partition(" ")
     commandName = commandToken.split("@", 1)[0].lower()
-    if commandName != "/mail":
+    if commandName == "/mail":
+        return query.strip() if separator else ""
+    mailMatch = re.match(
+        r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
+        r"check(?:\s+for)?(?:\s+any)?\s+(?:my\s+)?"
+        r"(?:gmail|e-?mails?|mails?|inbox)"
+        r"(?:\s+(?:for|regarding|about|from)\s+(.+?))?[.?!]*$",
+        messageText.strip(),
+        flags=re.IGNORECASE,
+    )
+    if mailMatch is None:
         return None
-    return query.strip() if separator else ""
+    naturalQuery = (mailMatch.group(1) or "").strip()
+    return re.sub(
+        r"^(?:(?:a|an|the|my|recent|latest|recently)\s+)+",
+        "",
+        naturalQuery,
+        flags=re.IGNORECASE,
+    )
 
 
 def searchIndexedMail(query: str, resultLimit: int = 10) -> list[dict[str, str]]:

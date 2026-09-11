@@ -59,7 +59,7 @@ Use `/research <question>` in the Main Telegram topic for current online researc
 
 Google commands in Telegram use the following boundaries:
 
-- `/mail [terms]` searches Gmail snapshots from all four accounts.
+- `/mail [terms]` searches Gmail snapshots from all four accounts. Natural requests such as “check my mail for an H&M purchase” use the same real search path.
 - `/calendar [terms]` searches personal-work Calendar events.
 - `/drive [terms]` searches all four Drives live and returns Google view links.
 - `/drive-folder work | Applications` creates a folder in the named account.

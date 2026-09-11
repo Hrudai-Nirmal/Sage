@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "seconds",
-              "secondsInterval": 30
+              "secondsInterval": 5
             }
           ]
         }
       },
       "id": "a4f37075-6bf9-4055-aad8-0d09bfb4b2ab",
-      "name": "Poll Every 30 Seconds",
+      "name": "Poll Every 5 Seconds",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -121,7 +121,7 @@
     }
   ],
   "connections": {
-    "Poll Every 30 Seconds": {
+    "Poll Every 5 Seconds": {
       "main": [
         [
           {

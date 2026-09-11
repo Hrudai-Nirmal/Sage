@@ -24,7 +24,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Daily maintenance clears only Sage temporary artifacts older than seven days and model-server memory caches; it does not delete documents, databases, model weights, or backup data.
 - Tasks are approval-created and initially support title, notes, priority, due timestamp, and recurrence. New schema columns are added without dropping existing SQLite task data.
 - Telegram delivery is at-least-once: Core records each Telegram message ID once and returns a successful duplicate acknowledgement for safe n8n retries.
-- The versioned n8n Telegram poller runs every 30 seconds, filters incoming updates against runtime allowlists, and commits its Bot API offset only after Core accepts the batch.
+- The versioned n8n Telegram poller runs every five seconds, filters incoming updates against runtime allowlists, and commits its Bot API offset only after Core accepts the batch. The previous 30-second cadence caused roughly 15 seconds of average ingress latency before model work began.
 - n8n permits workflow environment access only because the local poller must read its private bot and Core-ingress credentials; `configure-telegram.sh` copies only the ingress credential, never the independent approval credentials, into n8n's Telegram environment.
 - Telegram task and case commands create proposals only: `/task <title>` and `/case <title> | <objective>`. Inline callbacks are allowlisted and deduplicated before the native dispatcher uses Core's isolated approval credential.
 - Declining a proposal atomically closes and audits it without creating a task or case.
@@ -50,7 +50,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Scheduled reports receive a bounded snapshot of current open tasks and active cases. Notifications are deterministic text and do not invoke a model.
 - Google OAuth credentials remain encrypted inside n8n. A separate private `google.env` maps stable account keys to exact mailbox identities and shares only an ingress token with Core and n8n.
 - Gmail polling checks every five minutes. Core validates each claimed account identity, deduplicates messages by account and Gmail message ID, and queues each new message once for conservative local triage.
-- Gmail polling uses read-only list/get requests and never marks mail read. `/mail [terms]` searches bounded local snapshots across personal-work, work, personal, and college.
+- Gmail polling uses read-only list/get requests and never marks mail read. `/mail [terms]` and deterministic wording such as “check my mail for …” search bounded local snapshots across personal-work, work, personal, and college instead of falling through to the model.
 - Calendar polling is restricted to the personal-work account and runs every 30 minutes. Confirmed timed events create durable deterministic reminders due 10 minutes before their start; changed and cancelled events replace or remove pending reminders. `/calendar [terms]` searches the local snapshot.
 - The existing Telegram dispatcher owns Calendar reminder and email-triage jobs, so these features do not create additional Sage or Iris processes. Sleep and Shutdown retain due work as backlog; Normal and Eco deliver it.
 - Email triage automatically notifies only for explicit security, billing, placement, or deadline signals. Gmail is never marked read. Explicit deadline/action language may create a task proposal, but only the user's Telegram approval can materialize it.

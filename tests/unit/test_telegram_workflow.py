@@ -17,6 +17,20 @@ def testTelegramPollerDoesNotCallModelsOrSendReplies():
     ]
 
 
+def testTelegramPollerUsesFiveSecondLowLatencyCadence():
+    """Telegram ingress should not add a fifteen-second average response delay."""
+    workflowPath = Path(__file__).parents[2] / "workflows" / "telegram-poller.json"
+    workflow = json.loads(workflowPath.read_text())
+    scheduleNode = next(
+        node for node in workflow["nodes"] if node["type"] == "n8n-nodes-base.scheduleTrigger"
+    )
+
+    assert scheduleNode["name"] == "Poll Every 5 Seconds"
+    assert scheduleNode["parameters"]["rule"]["interval"] == [
+        {"field": "seconds", "secondsInterval": 5}
+    ]
+
+
 def testTelegramPollerNormalizesPhotosAndDocuments():
     """Ingress forwards bounded attachment metadata while leaving downloads to the host."""
     workflowPath = Path(__file__).parents[2] / "workflows" / "telegram-poller.json"
