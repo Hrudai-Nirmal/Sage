@@ -108,9 +108,41 @@ def getMailQuery(messageText: str) -> str | None:
     commandName = commandToken.split("@", 1)[0].lower()
     if commandName == "/mail":
         return query.strip() if separator else ""
+    serviceNotificationMatch = re.match(
+        r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
+        r"(?:check|search|find|show|scan|look\s+for)"
+        r"(?:\s+for)?(?:\s+any)?(?:\s+recent)?\s+"
+        r"(?:notifications?|alerts?|updates?|messages?)\s+"
+        r"(?:from|regarding|about)\s+(.+?)[.?!]*$",
+        messageText.strip(),
+        flags=re.IGNORECASE,
+    )
+    if serviceNotificationMatch is not None:
+        sourceNames = [
+            sourceName.strip()
+            for sourceName in re.split(
+                r"\s+(?:and|or)\s+|,\s*",
+                serviceNotificationMatch.group(1),
+                flags=re.IGNORECASE,
+            )
+            if sourceName.strip()
+        ]
+        return "|".join(f"from:{sourceName}" for sourceName in sourceNames[:10])
+    receivedMailMatch = re.match(
+        r"^(?:do\s+i\s+have|have\s+i\s+received|did\s+i\s+get)"
+        r"(?:\s+any)?\s+(?:gmail|e-?mails?|mails?|messages?|anything)"
+        r"(?:\s+(from|about|regarding)\s+(.+?))?[.?!]*$",
+        messageText.strip(),
+        flags=re.IGNORECASE,
+    )
+    if receivedMailMatch is not None:
+        relation = (receivedMailMatch.group(1) or "").casefold()
+        receivedQuery = (receivedMailMatch.group(2) or "").strip()
+        return f"from:{receivedQuery}" if relation == "from" else receivedQuery
     mailMatch = re.match(
         r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
-        r"check(?:\s+for)?(?:\s+any)?\s+(?:my\s+)?"
+        r"(?:check|search|find|show|scan|look\s+for)"
+        r"(?:\s+for)?(?:\s+me)?(?:\s+any)?\s+(?:my\s+)?"
         r"(?:gmail|e-?mails?|mails?|inbox)"
         r"(?:\s+(?:for|regarding|about|from)\s+(.+?))?[.?!]*$",
         messageText.strip(),
@@ -131,13 +163,27 @@ def searchIndexedMail(query: str, resultLimit: int = 10) -> list[dict[str, str]]
     """Search recent local Gmail snapshots without making a remote Google request."""
     if resultLimit < 1 or resultLimit > 20:
         raise ValueError("Mail result limit must be between 1 and 20")
-    queryTerms = [queryTerm.casefold() for queryTerm in query.split() if queryTerm][:10]
     whereClauses = []
     queryValues: list[object] = []
     searchableColumns = "lower(sender || ' ' || subject || ' ' || snippet || ' ' || body_text)"
-    for queryTerm in queryTerms:
-        whereClauses.append(f"{searchableColumns} LIKE ?")
-        queryValues.append(f"%{queryTerm}%")
+    alternativeClauses = []
+    for alternativeQuery in query.split("|")[:10]:
+        queryTerms = [
+            queryTerm.casefold() for queryTerm in alternativeQuery.split() if queryTerm
+        ][:10]
+        if not queryTerms:
+            continue
+        termClauses = []
+        for queryTerm in queryTerms:
+            if queryTerm.startswith("from:") and len(queryTerm) > len("from:"):
+                termClauses.append("lower(sender) LIKE ?")
+                queryValues.append(f"%{queryTerm.removeprefix('from:')}%")
+            else:
+                termClauses.append(f"{searchableColumns} LIKE ?")
+                queryValues.append(f"%{queryTerm}%")
+        alternativeClauses.append("(" + " AND ".join(termClauses) + ")")
+    if alternativeClauses:
+        whereClauses.append("(" + " OR ".join(alternativeClauses) + ")")
     whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
     queryValues.append(resultLimit)
     with sqlite3.connect(DATABASE_PATH) as connection:

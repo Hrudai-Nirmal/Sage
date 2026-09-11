@@ -333,19 +333,61 @@ def testSearchesIndexedMailWithoutCallingGoogle(tmp_path, monkeypatch):
 
     assert dispatcher.getMailQuery("/mail@Hrudai_bot placement Friday") == "placement Friday"
     assert dispatcher.getMailQuery("/mail") == ""
-    assert dispatcher.getMailQuery("show my mail") is None
+    assert dispatcher.getMailQuery("show my mail") == ""
     assert dispatcher.getMailQuery("Check my mail for a recent H&M purchase") == "H&M purchase"
     assert (
         dispatcher.getMailQuery("Can you check for any mails regarding my recent H&M purchase")
         == "H&M purchase"
     )
     assert dispatcher.getMailQuery("Please check my Gmail") == ""
+    assert (
+        dispatcher.getMailQuery("Can you check for any recent notifications from neon and inngest")
+        == "from:neon|from:inngest"
+    )
+    assert dispatcher.getMailQuery("Do I have any emails from Neon?") == "from:Neon"
+    assert dispatcher.getMailQuery("Find emails about placements") == "placements"
+    assert dispatcher.getMailQuery("Show me my inbox") == ""
     mailReply = dispatcher.formatMailSearch(dispatcher.searchIndexedMail("placement Friday"))
 
     assert "personal-work" in mailReply
     assert "Interview Friday" in mailReply
     assert "placements@example.edu" in mailReply
     assert "Room 201" in mailReply
+
+
+def testSearchesAlternativeEmailSendersInsteadOfRequiringOneMessageToContainBoth(
+    tmp_path, monkeypatch
+):
+    """A request for Neon and Inngest returns independent matching messages."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherMailAlternatives", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    databasePath = tmp_path / "sage.db"
+    with sqlite3.connect(databasePath) as connection:
+        connection.execute(
+            """CREATE TABLE email_messages (
+                account_key TEXT, sender TEXT, subject TEXT, snippet TEXT,
+                body_text TEXT, internal_date TEXT
+            )"""
+        )
+        connection.executemany(
+            "INSERT INTO email_messages VALUES (?, ?, ?, '', '', ?)",
+            [
+                ("work", "alerts@neon.tech", "Database usage alert", "1789092000002"),
+                ("work", "notifications@inngest.com", "Function failed", "1789092000001"),
+                ("personal", "newsletter@example.com", "Weekly digest", "1789092000000"),
+            ],
+        )
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+
+    messages = dispatcher.searchIndexedMail("from:neon|from:inngest")
+
+    assert [message["subject"] for message in messages] == [
+        "Database usage alert",
+        "Function failed",
+    ]
 
 
 def testSearchesIndexedCalendarWithoutCallingGoogle(tmp_path, monkeypatch):
