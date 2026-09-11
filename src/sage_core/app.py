@@ -80,6 +80,21 @@ class ScheduleApprovalRequestPayload(BaseModel):
     payload: ScheduleProposalPayload
 
 
+class DriveDeleteProposalPayload(BaseModel):
+    """Validate one exact Drive file deletion target before approval."""
+
+    accountKey: Literal["personal-work", "work", "personal", "college"]
+    fileId: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=500)
+
+
+class DriveDeleteApprovalRequestPayload(BaseModel):
+    """Require independent user confirmation for every Drive deletion."""
+
+    actionType: Literal["DELETE_DRIVE_FILE"]
+    payload: DriveDeleteProposalPayload
+
+
 class ApprovalConfirmationPayload(BaseModel):
     """Capture the independently verified Telegram actor who approved an action."""
 
@@ -286,7 +301,12 @@ def createApp(
 
     @app.post("/v1/approval-requests", status_code=status.HTTP_201_CREATED)
     def createApprovalRequest(
-        approvalRequest: TaskApprovalRequestPayload | CaseApprovalRequestPayload | ScheduleApprovalRequestPayload,
+        approvalRequest: (
+            TaskApprovalRequestPayload
+            | CaseApprovalRequestPayload
+            | ScheduleApprovalRequestPayload
+            | DriveDeleteApprovalRequestPayload
+        ),
         sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
     ) -> dict[str, str]:
         """Create a pending proposal from the constrained agent proposal channel."""

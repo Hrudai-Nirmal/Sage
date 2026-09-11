@@ -17,6 +17,9 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from sage_core.database import SageDatabase
+from sage_core.drive_action_state import DriveActionRepository
+from sage_core.email_intelligence import classifyEmail
+from sage_core.google_jobs import GoogleJobRepository
 from sage_core.schedule_state import ScheduleStateRepository
 
 
@@ -161,13 +164,99 @@ def formatMailSearch(messages: list[dict[str, str]]) -> str:
 
 
 def getLocalSearchCommand(messageText: str) -> tuple[str, str] | None:
-    """Parse exact Calendar or Drive commands without inferring external access."""
+    """Parse the exact local Calendar command without inferring external access."""
     commandToken, separator, query = messageText.strip().partition(" ")
     commandName = commandToken.split("@", 1)[0].lower()
-    resourceName = {"/calendar": "calendar", "/drive": "drive"}.get(commandName)
+    resourceName = {"/calendar": "calendar"}.get(commandName)
     if resourceName is None:
         return None
     return resourceName, query.strip() if separator else ""
+
+
+def getDriveCommand(messageText: str) -> dict[str, str] | None:
+    """Parse exact live Drive commands and reject incomplete mutations."""
+    commandToken, separator, arguments = messageText.strip().partition(" ")
+    commandName = commandToken.split("@", 1)[0].lower()
+    if commandName == "/drive":
+        return {"action": "SEARCH", "query": arguments.strip() if separator else ""}
+    commandActions = {
+        "/drive-folder": "CREATE_FOLDER",
+        "/drive-rename": "RENAME",
+        "/drive-delete": "DELETE",
+    }
+    action = commandActions.get(commandName)
+    if action is None or not separator:
+        return None
+    argumentParts = [part.strip() for part in arguments.split("|")]
+    accountKeys = {"personal-work", "work", "personal", "college"}
+    if action == "CREATE_FOLDER" and len(argumentParts) in {2, 3}:
+        accountKey, name = argumentParts[:2]
+        parentId = argumentParts[2] if len(argumentParts) == 3 else ""
+        if accountKey in accountKeys and name:
+            return {
+                "action": action,
+                "accountKey": accountKey,
+                "name": name,
+                "parentId": parentId,
+            }
+    if action in {"RENAME", "DELETE"} and len(argumentParts) == 3:
+        accountKey, fileId, name = argumentParts
+        if (
+            accountKey in accountKeys
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,200}", fileId)
+            and name
+        ):
+            return {"action": action, "accountKey": accountKey, "fileId": fileId, "name": name}
+    return None
+
+
+def requestLiveDrive(
+    secrets: dict[str, str], accountKey: str, payload: dict[str, object]
+) -> dict[str, object]:
+    """Call one account-bound local n8n webhook with its private tool token."""
+    if accountKey not in {"personal-work", "work", "personal", "college"}:
+        raise ValueError("Google Drive account key is not configured")
+    return postJson(
+        f"http://127.0.0.1:5678/webhook/sage-drive-{accountKey}",
+        payload,
+        {
+            "Content-Type": "application/json",
+            "X-Sage-Drive-Token": secrets["SAGE_DRIVE_TOOL_TOKEN"],
+        },
+    )
+
+
+def searchLiveDrive(secrets: dict[str, str], query: str) -> list[dict[str, str]]:
+    """Search all four Drives live and preserve account attribution."""
+    searchResults = []
+    for accountKey in ("personal-work", "work", "personal", "college"):
+        response = requestLiveDrive(secrets, accountKey, {"action": "SEARCH", "query": query})
+        for rawFile in response.get("files", []):
+            if isinstance(rawFile, dict):
+                searchResults.append(
+                    {
+                        "accountKey": accountKey,
+                        "name": str(rawFile.get("name", "")),
+                        "mimeType": str(rawFile.get("mimeType", "")),
+                        "modifiedAt": str(rawFile.get("modifiedTime", "")),
+                        "webViewLink": str(rawFile.get("webViewLink", "")),
+                    }
+                )
+    return searchResults[:20]
+
+
+def executeDriveCommand(secrets: dict[str, str], driveCommand: dict[str, str]) -> str:
+    """Execute one explicit non-delete Drive read or write request."""
+    action = driveCommand["action"]
+    if action == "SEARCH":
+        return formatDriveSearch(searchLiveDrive(secrets, driveCommand["query"]))
+    if action not in {"CREATE_FOLDER", "RENAME"}:
+        raise ValueError("Drive command requires approval or is unsupported")
+    accountKey = driveCommand["accountKey"]
+    response = requestLiveDrive(secrets, accountKey, driveCommand)
+    actionLabel = "created" if action == "CREATE_FOLDER" else "renamed"
+    fileName = str(response.get("name", driveCommand["name"]))
+    return f"Drive item {actionLabel} in [{accountKey}]: {fileName}"
 
 
 def searchIndexedCalendar(query: str, resultLimit: int = 10) -> list[dict[str, str]]:
@@ -207,33 +296,10 @@ def formatCalendarSearch(events: list[dict[str, str]]) -> str:
     return ("Calendar results:\n\n" + "\n\n".join(sections))[:4_000]
 
 
-def searchIndexedDrive(query: str, resultLimit: int = 10) -> list[dict[str, str]]:
-    """Search indexed Drive metadata from local SQLite without reading file content."""
-    queryTerms = [queryTerm.casefold() for queryTerm in query.split() if queryTerm][:10]
-    whereClauses = []
-    queryValues: list[object] = []
-    for queryTerm in queryTerms:
-        whereClauses.append("lower(name || ' ' || mime_type) LIKE ?")
-        queryValues.append(f"%{queryTerm}%")
-    whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
-    queryValues.append(resultLimit)
-    with sqlite3.connect(DATABASE_PATH) as connection:
-        fileRows = connection.execute(
-            f"""SELECT account_key, name, mime_type, modified_at, web_view_link
-                FROM drive_files {whereSql} ORDER BY modified_at DESC LIMIT ?""",
-            queryValues,
-        ).fetchall()
-    return [
-        {"accountKey": str(accountKey), "name": str(name), "mimeType": str(mimeType),
-         "modifiedAt": str(modifiedAt), "webViewLink": str(webViewLink)}
-        for accountKey, name, mimeType, modifiedAt, webViewLink in fileRows
-    ]
-
-
 def formatDriveSearch(files: list[dict[str, str]]) -> str:
     """Render bounded Drive metadata with provider-returned live URLs."""
     if not files:
-        return "No indexed Google Drive file matched."
+        return "No live Google Drive file matched."
     sections = [
         f"{index}. [{driveFile['accountKey']}] {driveFile['name']}\n"
         f"Type: {driveFile['mimeType']} | Modified: {driveFile['modifiedAt']}\n"
@@ -546,6 +612,7 @@ def getSecretValues() -> dict[str, str]:
         DATA_ROOT / "secrets" / "core.env",
         DATA_ROOT / "secrets" / "model-server.env",
         DATA_ROOT / "secrets" / "telegram.env",
+        DATA_ROOT / "secrets" / "google.env",
     ):
         for line in secretFile.read_text().splitlines():
             key, separator, value = line.partition("=")
@@ -663,6 +730,91 @@ def dispatchNextScheduledDelivery(
             setModelAgentState("com.sage.model-sage", False)
 
 
+def dispatchNextCalendarReminder(
+    secrets: dict[str, str], googleJobRepository: GoogleJobRepository
+) -> bool:
+    """Deliver one deterministic Calendar reminder through the existing worker."""
+    if getCurrentMode() in {"SLEEP", "SHUTDOWN"}:
+        return False
+    reminder = googleJobRepository.claimDueCalendarReminder()
+    if reminder is None:
+        return False
+    accountKey = reminder["accountKey"]
+    eventId = reminder["eventId"]
+    try:
+        sendTelegramMessage(
+            secrets,
+            reminder["text"],
+            topicId=int(secrets["SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID"]),
+        )
+        googleJobRepository.completeCalendarReminder(accountKey, eventId)
+        return True
+    except Exception as error:
+        logging.error("Calendar reminder delivery failed: %s", type(error).__name__)
+        googleJobRepository.failCalendarReminder(accountKey, eventId, type(error).__name__)
+        return False
+
+
+def dispatchNextEmailTriage(
+    secrets: dict[str, str], googleJobRepository: GoogleJobRepository
+) -> bool:
+    """Classify one new email and send only conservative actionable output."""
+    if getCurrentMode() in {"SLEEP", "SHUTDOWN"}:
+        return False
+    triageJob = googleJobRepository.claimEmailTriage()
+    if triageJob is None:
+        return False
+    accountKey = str(triageJob["accountKey"])
+    messageId = str(triageJob["messageId"])
+    try:
+        classification = classifyEmail(triageJob)
+        if classification["shouldNotify"]:
+            replyMarkup = None
+            notificationText = str(classification["notificationText"])
+            if classification["suggestedAction"] == "CREATE_TASK":
+                proposal = postJson(
+                    f"{CORE_URL}/v1/approval-requests",
+                    {
+                        "actionType": "CREATE_TASK",
+                        "payload": {
+                            "title": str(classification["taskTitle"]),
+                            "description": (
+                                f"Suggested from [{accountKey}] Gmail message {messageId}. "
+                                "Review the original email before acting."
+                            ),
+                            "priority": "HIGH",
+                        },
+                    },
+                    {
+                        "Content-Type": "application/json",
+                        "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
+                    },
+                )
+                approvalId = str(proposal["id"])
+                notificationText += (
+                    "\n\nSuggested action: create a task. This requires your approval."
+                    "\nGmail remains unread; label/archive are suggestions only."
+                )
+                replyMarkup = {
+                    "inline_keyboard": [[
+                        {"text": "Approve task", "callback_data": f"approve:{approvalId}"},
+                        {"text": "Decline", "callback_data": f"decline:{approvalId}"},
+                    ]]
+                }
+            sendTelegramMessage(
+                secrets,
+                notificationText,
+                replyMarkup=replyMarkup,
+                topicId=int(secrets["SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID"]),
+            )
+        googleJobRepository.completeEmailTriage(accountKey, messageId, classification)
+        return True
+    except Exception as error:
+        logging.error("Email triage failed: %s", type(error).__name__)
+        googleJobRepository.failEmailTriage(accountKey, messageId, type(error).__name__)
+        return False
+
+
 def createApprovalCard(secrets: dict[str, str], messageText: str) -> str | None:
     """Create an explicit command proposal and send its one-time approval controls."""
     if messageText.startswith("/task "):
@@ -675,6 +827,17 @@ def createApprovalCard(secrets: dict[str, str], messageText: str) -> str | None:
         actionType = "CREATE_CASE"
         payload = {"title": title, "objective": objective}
         label = f"Case: {title}\nObjective: {objective}"
+    elif (driveCommand := getDriveCommand(messageText)) and driveCommand["action"] == "DELETE":
+        actionType = "DELETE_DRIVE_FILE"
+        payload = {
+            "accountKey": driveCommand["accountKey"],
+            "fileId": driveCommand["fileId"],
+            "name": driveCommand["name"],
+        }
+        label = (
+            "Delete Drive file permanently: "
+            f"[{driveCommand['accountKey']}] {driveCommand['name']}"
+        )
     elif schedulePayload := getScheduleProposal(messageText):
         actionType = "CREATE_SCHEDULE"
         payload = schedulePayload
@@ -685,7 +848,7 @@ def createApprovalCard(secrets: dict[str, str], messageText: str) -> str | None:
         )
     else:
         return None
-    if not payload.get("title"):
+    if actionType != "DELETE_DRIVE_FILE" and not payload.get("title"):
         return None
     proposal = postJson(
         f"{CORE_URL}/v1/approval-requests",
@@ -707,6 +870,38 @@ def createApprovalCard(secrets: dict[str, str], messageText: str) -> str | None:
         },
     )
     return "Approval card sent. No change will occur until you choose an option."
+
+
+def dispatchNextDriveAction(
+    secrets: dict[str, str], driveActionRepository: DriveActionRepository
+) -> bool:
+    """Execute one independently approved Drive delete with durable retries."""
+    if getCurrentMode() in {"SLEEP", "SHUTDOWN"}:
+        return False
+    driveAction = driveActionRepository.claimPendingAction()
+    if driveAction is None:
+        return False
+    actionId = driveAction["id"]
+    try:
+        requestLiveDrive(
+            secrets,
+            driveAction["accountKey"],
+            {"action": "DELETE", "fileId": driveAction["fileId"]},
+        )
+        driveActionRepository.completeAction(actionId)
+    except Exception as error:
+        logging.error("Approved Drive action failed: %s", type(error).__name__)
+        driveActionRepository.failAction(actionId, type(error).__name__)
+        return False
+    try:
+        sendTelegramMessage(
+            secrets,
+            f"Deleted Drive file: [{driveAction['accountKey']}] {driveAction['name']}",
+            topicId=int(secrets["SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID"]),
+        )
+    except Exception as error:
+        logging.warning("Drive completion notification failed: %s", type(error).__name__)
+    return True
 
 
 def dispatchNextCallback(secrets: dict[str, str]) -> bool:
@@ -828,13 +1023,14 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
         if replyText is None and (mailQuery := getMailQuery(messageText)) is not None:
             replyText = formatMailSearch(searchIndexedMail(mailQuery))
             sendTelegramMessage(secrets, replyText)
+        if replyText is None and (driveCommand := getDriveCommand(messageText)) is not None:
+            if driveCommand["action"] == "DELETE":
+                raise RuntimeError("Drive deletion did not enter the approval path")
+            replyText = executeDriveCommand(secrets, driveCommand)
+            sendTelegramMessage(secrets, replyText)
         if replyText is None and (localSearch := getLocalSearchCommand(messageText)) is not None:
-            resourceName, localQuery = localSearch
-            replyText = (
-                formatCalendarSearch(searchIndexedCalendar(localQuery))
-                if resourceName == "calendar"
-                else formatDriveSearch(searchIndexedDrive(localQuery))
-            )
+            _resourceName, localQuery = localSearch
+            replyText = formatCalendarSearch(searchIndexedCalendar(localQuery))
             sendTelegramMessage(secrets, replyText)
         if replyText is None:
             attachment = json.loads(attachmentJson) if attachmentJson else None
@@ -917,9 +1113,15 @@ def recoverInterruptedWork() -> None:
 def main() -> None:
     """Keep exactly one dispatcher loop alive under launchd supervision."""
     secrets = getSecretValues()
-    scheduleStateRepository = ScheduleStateRepository(SageDatabase(DATABASE_PATH))
+    database = SageDatabase(DATABASE_PATH)
+    scheduleStateRepository = ScheduleStateRepository(database)
+    googleJobRepository = GoogleJobRepository(database)
+    driveActionRepository = DriveActionRepository(database)
     recoverInterruptedWork()
     scheduleStateRepository.recoverInterruptedDeliveries()
+    googleJobRepository.backfillCalendarReminders()
+    googleJobRepository.recoverInterruptedJobs()
+    driveActionRepository.recoverInterruptedActions()
     previousMode: str | None = None
     while True:
         try:
@@ -928,6 +1130,9 @@ def main() -> None:
             dispatchNextMessage(secrets)
             previousMode = reconcileModeState(getCurrentMode(), previousMode)
             dispatchNextScheduledDelivery(secrets, scheduleStateRepository)
+            dispatchNextCalendarReminder(secrets, googleJobRepository)
+            dispatchNextEmailTriage(secrets, googleJobRepository)
+            dispatchNextDriveAction(secrets, driveActionRepository)
         except Exception as error:
             logging.error("Telegram dispatcher iteration failed: %s", type(error).__name__)
         time.sleep(3)

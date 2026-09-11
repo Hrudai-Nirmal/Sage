@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from sage_core.audit_state import AuditStateRepository
 from sage_core.database import SageDatabase
+from sage_core.google_jobs import GoogleJobRepository
 
 
 class GoogleStateRepository:
@@ -18,6 +19,7 @@ class GoogleStateRepository:
         database: SageDatabase,
         googleAccounts: dict[str, str],
         calendarAccountKey: str | None = None,
+        googleJobRepository: GoogleJobRepository | None = None,
     ) -> None:
         """Bind stable account keys to their exact OAuth mailbox identities."""
         self.database = database
@@ -26,6 +28,7 @@ class GoogleStateRepository:
             for accountKey, accountEmail in googleAccounts.items()
         }
         self.calendarAccountKey = calendarAccountKey
+        self.googleJobRepository = googleJobRepository or GoogleJobRepository(database)
         self.auditStateRepository = AuditStateRepository(database)
 
     def _validateAccount(self, accountKey: str, accountEmail: str) -> None:
@@ -71,7 +74,10 @@ class GoogleStateRepository:
                     eventStatus="COMPLETE",
                     metadata={"accountKey": accountKey},
                 )
-        return insertResult.rowcount == 1
+        isNewMessage = insertResult.rowcount == 1
+        if isNewMessage:
+            self.googleJobRepository.queueEmailTriage(accountKey, str(gmailMessage["messageId"]))
+        return isNewMessage
 
     def indexCalendarEvent(self, calendarEvent: dict[str, object]) -> str:
         """Upsert one personal-work calendar snapshot without changing Google Calendar."""
@@ -121,6 +127,7 @@ class GoogleStateRepository:
                 f"{accountKey}:{calendarEvent['eventId']}",
                 accountKey,
             )
+        self.googleJobRepository.scheduleCalendarReminder(calendarEvent)
         return "INDEXED" if existingEvent is None else "UPDATED"
 
     def indexDriveFile(self, driveFile: dict[str, object]) -> str:

@@ -1,0 +1,329 @@
+{
+  "name": "Sage Google Drive Tool",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sage-drive-personal-work",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "drive-webhook-personal-work",
+      "name": "Drive Webhook personal-work",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -800,
+        -360
+      ],
+      "webhookId": "sage-drive-personal-work"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-drive-token'] !== $env.SAGE_DRIVE_TOOL_TOKEN) throw new Error('Unauthorized Drive tool request');\nconst action = String(input.action ?? '');\nif (!['SEARCH', 'CREATE_FOLDER', 'RENAME', 'DELETE'].includes(action)) throw new Error('Unsupported Drive action');\nconst fileId = String(input.fileId ?? '');\nif (['RENAME', 'DELETE'].includes(action) && !/^[A-Za-z0-9_-]{1,200}$/.test(fileId)) throw new Error('Invalid Drive file ID');\nconst name = String(input.name ?? '').trim();\nif (['CREATE_FOLDER', 'RENAME'].includes(action) && (!name || name.length > 500)) throw new Error('Invalid Drive name');\nconst parentId = String(input.parentId ?? '');\nif (parentId && !/^[A-Za-z0-9_-]{1,200}$/.test(parentId)) throw new Error('Invalid Drive parent ID');\nconst escapedQuery = String(input.query ?? '').replace(/'/g, \"\\\\'\");\nconst query = escapedQuery ? `name contains '${escapedQuery}' and trashed = false` : 'trashed = false';\nconst fields = 'files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)';\nconst requestMethod = {SEARCH:'GET', CREATE_FOLDER:'POST', RENAME:'PATCH', DELETE:'DELETE'}[action];\nlet requestUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=50&orderBy=modifiedTime%20desc&fields=${encodeURIComponent(fields)}`;\nlet requestBody = {};\nif (action === 'CREATE_FOLDER') { requestUrl = 'https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,modifiedTime,webViewLink,parents'; requestBody = {name, mimeType:'application/vnd.google-apps.folder', ...(parentId ? {parents:[parentId]} : {})}; }\nif (action === 'RENAME') { requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,modifiedTime,webViewLink,parents`; requestBody = {name}; }\nif (action === 'DELETE') requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}`;\nreturn [{json:{accountKey:'personal-work', action, requestBody, requestMethod, requestUrl, shouldSendBody:['POST','PATCH'].includes(requestMethod)}}];"
+      },
+      "id": "drive-validate-personal-work",
+      "name": "Validate Drive personal-work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "={{ $json.requestMethod }}",
+        "url": "={{ $json.requestUrl }}",
+        "sendBody": "={{ $json.shouldSendBody }}",
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {}
+      },
+      "id": "drive-api-personal-work",
+      "name": "Drive API personal-work",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -300,
+        -360
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "id": "__PERSONAL_WORK_CREDENTIAL_ID__",
+          "name": "__PERSONAL_WORK_CREDENTIAL_NAME__"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sage-drive-work",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "drive-webhook-work",
+      "name": "Drive Webhook work",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -800,
+        -120
+      ],
+      "webhookId": "sage-drive-work"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-drive-token'] !== $env.SAGE_DRIVE_TOOL_TOKEN) throw new Error('Unauthorized Drive tool request');\nconst action = String(input.action ?? '');\nif (!['SEARCH', 'CREATE_FOLDER', 'RENAME', 'DELETE'].includes(action)) throw new Error('Unsupported Drive action');\nconst fileId = String(input.fileId ?? '');\nif (['RENAME', 'DELETE'].includes(action) && !/^[A-Za-z0-9_-]{1,200}$/.test(fileId)) throw new Error('Invalid Drive file ID');\nconst name = String(input.name ?? '').trim();\nif (['CREATE_FOLDER', 'RENAME'].includes(action) && (!name || name.length > 500)) throw new Error('Invalid Drive name');\nconst parentId = String(input.parentId ?? '');\nif (parentId && !/^[A-Za-z0-9_-]{1,200}$/.test(parentId)) throw new Error('Invalid Drive parent ID');\nconst escapedQuery = String(input.query ?? '').replace(/'/g, \"\\\\'\");\nconst query = escapedQuery ? `name contains '${escapedQuery}' and trashed = false` : 'trashed = false';\nconst fields = 'files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)';\nconst requestMethod = {SEARCH:'GET', CREATE_FOLDER:'POST', RENAME:'PATCH', DELETE:'DELETE'}[action];\nlet requestUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=50&orderBy=modifiedTime%20desc&fields=${encodeURIComponent(fields)}`;\nlet requestBody = {};\nif (action === 'CREATE_FOLDER') { requestUrl = 'https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,modifiedTime,webViewLink,parents'; requestBody = {name, mimeType:'application/vnd.google-apps.folder', ...(parentId ? {parents:[parentId]} : {})}; }\nif (action === 'RENAME') { requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,modifiedTime,webViewLink,parents`; requestBody = {name}; }\nif (action === 'DELETE') requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}`;\nreturn [{json:{accountKey:'work', action, requestBody, requestMethod, requestUrl, shouldSendBody:['POST','PATCH'].includes(requestMethod)}}];"
+      },
+      "id": "drive-validate-work",
+      "name": "Validate Drive work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "={{ $json.requestMethod }}",
+        "url": "={{ $json.requestUrl }}",
+        "sendBody": "={{ $json.shouldSendBody }}",
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {}
+      },
+      "id": "drive-api-work",
+      "name": "Drive API work",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -300,
+        -120
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "id": "__WORK_CREDENTIAL_ID__",
+          "name": "__WORK_CREDENTIAL_NAME__"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sage-drive-personal",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "drive-webhook-personal",
+      "name": "Drive Webhook personal",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -800,
+        120
+      ],
+      "webhookId": "sage-drive-personal"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-drive-token'] !== $env.SAGE_DRIVE_TOOL_TOKEN) throw new Error('Unauthorized Drive tool request');\nconst action = String(input.action ?? '');\nif (!['SEARCH', 'CREATE_FOLDER', 'RENAME', 'DELETE'].includes(action)) throw new Error('Unsupported Drive action');\nconst fileId = String(input.fileId ?? '');\nif (['RENAME', 'DELETE'].includes(action) && !/^[A-Za-z0-9_-]{1,200}$/.test(fileId)) throw new Error('Invalid Drive file ID');\nconst name = String(input.name ?? '').trim();\nif (['CREATE_FOLDER', 'RENAME'].includes(action) && (!name || name.length > 500)) throw new Error('Invalid Drive name');\nconst parentId = String(input.parentId ?? '');\nif (parentId && !/^[A-Za-z0-9_-]{1,200}$/.test(parentId)) throw new Error('Invalid Drive parent ID');\nconst escapedQuery = String(input.query ?? '').replace(/'/g, \"\\\\'\");\nconst query = escapedQuery ? `name contains '${escapedQuery}' and trashed = false` : 'trashed = false';\nconst fields = 'files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)';\nconst requestMethod = {SEARCH:'GET', CREATE_FOLDER:'POST', RENAME:'PATCH', DELETE:'DELETE'}[action];\nlet requestUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=50&orderBy=modifiedTime%20desc&fields=${encodeURIComponent(fields)}`;\nlet requestBody = {};\nif (action === 'CREATE_FOLDER') { requestUrl = 'https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,modifiedTime,webViewLink,parents'; requestBody = {name, mimeType:'application/vnd.google-apps.folder', ...(parentId ? {parents:[parentId]} : {})}; }\nif (action === 'RENAME') { requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,modifiedTime,webViewLink,parents`; requestBody = {name}; }\nif (action === 'DELETE') requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}`;\nreturn [{json:{accountKey:'personal', action, requestBody, requestMethod, requestUrl, shouldSendBody:['POST','PATCH'].includes(requestMethod)}}];"
+      },
+      "id": "drive-validate-personal",
+      "name": "Validate Drive personal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "={{ $json.requestMethod }}",
+        "url": "={{ $json.requestUrl }}",
+        "sendBody": "={{ $json.shouldSendBody }}",
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {}
+      },
+      "id": "drive-api-personal",
+      "name": "Drive API personal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -300,
+        120
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "id": "__PERSONAL_CREDENTIAL_ID__",
+          "name": "__PERSONAL_CREDENTIAL_NAME__"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sage-drive-college",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "drive-webhook-college",
+      "name": "Drive Webhook college",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -800,
+        360
+      ],
+      "webhookId": "sage-drive-college"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-drive-token'] !== $env.SAGE_DRIVE_TOOL_TOKEN) throw new Error('Unauthorized Drive tool request');\nconst action = String(input.action ?? '');\nif (!['SEARCH', 'CREATE_FOLDER', 'RENAME', 'DELETE'].includes(action)) throw new Error('Unsupported Drive action');\nconst fileId = String(input.fileId ?? '');\nif (['RENAME', 'DELETE'].includes(action) && !/^[A-Za-z0-9_-]{1,200}$/.test(fileId)) throw new Error('Invalid Drive file ID');\nconst name = String(input.name ?? '').trim();\nif (['CREATE_FOLDER', 'RENAME'].includes(action) && (!name || name.length > 500)) throw new Error('Invalid Drive name');\nconst parentId = String(input.parentId ?? '');\nif (parentId && !/^[A-Za-z0-9_-]{1,200}$/.test(parentId)) throw new Error('Invalid Drive parent ID');\nconst escapedQuery = String(input.query ?? '').replace(/'/g, \"\\\\'\");\nconst query = escapedQuery ? `name contains '${escapedQuery}' and trashed = false` : 'trashed = false';\nconst fields = 'files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents,owners(emailAddress,displayName),size)';\nconst requestMethod = {SEARCH:'GET', CREATE_FOLDER:'POST', RENAME:'PATCH', DELETE:'DELETE'}[action];\nlet requestUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=50&orderBy=modifiedTime%20desc&fields=${encodeURIComponent(fields)}`;\nlet requestBody = {};\nif (action === 'CREATE_FOLDER') { requestUrl = 'https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,modifiedTime,webViewLink,parents'; requestBody = {name, mimeType:'application/vnd.google-apps.folder', ...(parentId ? {parents:[parentId]} : {})}; }\nif (action === 'RENAME') { requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,modifiedTime,webViewLink,parents`; requestBody = {name}; }\nif (action === 'DELETE') requestUrl = `https://www.googleapis.com/drive/v3/files/${fileId}`;\nreturn [{json:{accountKey:'college', action, requestBody, requestMethod, requestUrl, shouldSendBody:['POST','PATCH'].includes(requestMethod)}}];"
+      },
+      "id": "drive-validate-college",
+      "name": "Validate Drive college",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "method": "={{ $json.requestMethod }}",
+        "url": "={{ $json.requestUrl }}",
+        "sendBody": "={{ $json.shouldSendBody }}",
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {}
+      },
+      "id": "drive-api-college",
+      "name": "Drive API college",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -300,
+        360
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "id": "__COLLEGE_CREDENTIAL_ID__",
+          "name": "__COLLEGE_CREDENTIAL_NAME__"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Drive Webhook personal-work": {
+      "main": [
+        [
+          {
+            "node": "Validate Drive personal-work",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Drive personal-work": {
+      "main": [
+        [
+          {
+            "node": "Drive API personal-work",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Webhook work": {
+      "main": [
+        [
+          {
+            "node": "Validate Drive work",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Drive work": {
+      "main": [
+        [
+          {
+            "node": "Drive API work",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Webhook personal": {
+      "main": [
+        [
+          {
+            "node": "Validate Drive personal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Drive personal": {
+      "main": [
+        [
+          {
+            "node": "Drive API personal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Webhook college": {
+      "main": [
+        [
+          {
+            "node": "Validate Drive college",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Drive college": {
+      "main": [
+        [
+          {
+            "node": "Drive API college",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "active": false
+}

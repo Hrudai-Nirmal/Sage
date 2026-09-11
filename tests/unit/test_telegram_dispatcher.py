@@ -173,6 +173,85 @@ def testDispatchesScheduledNotificationToItsDedicatedTopic(monkeypatch):
     assert sentMessages == [("Placement deadline\n\nSubmit the form", 7)]
 
 
+def testDispatchesCalendarReminderWithoutLoadingAnotherModel(monkeypatch):
+    """A due Calendar reminder uses the existing worker and Notifications topic."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramCalendarReminder", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    calls = []
+
+    class FakeGoogleJobs:
+        def claimDueCalendarReminder(self):
+            return {"accountKey": "personal-work", "eventId": "event-1", "text": "Upcoming event"}
+
+        def completeCalendarReminder(self, accountKey, eventId):
+            calls.append(("complete", accountKey, eventId))
+
+        def failCalendarReminder(self, accountKey, eventId, errorType):
+            raise AssertionError(errorType)
+
+    monkeypatch.setattr(dispatcher, "getCurrentMode", lambda: "NORMAL")
+    monkeypatch.setattr(
+        dispatcher,
+        "sendTelegramMessage",
+        lambda secrets, text, replyMarkup=None, topicId=None: calls.append(("send", text, topicId)),
+    )
+
+    assert dispatcher.dispatchNextCalendarReminder(
+        {"SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID": "7"}, FakeGoogleJobs()
+    )
+    assert calls == [
+        ("send", "Upcoming event", 7),
+        ("complete", "personal-work", "event-1"),
+    ]
+
+
+def testImportantEmailCreatesOneApprovalCardInNotifications(monkeypatch):
+    """An explicit deadline gets an alert plus an independently approved task proposal."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramEmailTriage", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    sentMessages = []
+    completed = []
+
+    class FakeGoogleJobs:
+        def claimEmailTriage(self):
+            return {
+                "accountKey": "college", "messageId": "message-1",
+                "sender": "placements@example.edu", "subject": "Submit placement form",
+                "snippet": "Deadline: Friday", "bodyText": "Submit by Friday", "labelIds": ["UNREAD"],
+            }
+
+        def completeEmailTriage(self, accountKey, messageId, classification):
+            completed.append((accountKey, messageId, classification["category"]))
+
+        def failEmailTriage(self, accountKey, messageId, errorType):
+            raise AssertionError(errorType)
+
+    monkeypatch.setattr(dispatcher, "getCurrentMode", lambda: "NORMAL")
+    monkeypatch.setattr(dispatcher, "postJson", lambda url, payload, headers: {"id": "approval-1"})
+    monkeypatch.setattr(
+        dispatcher,
+        "sendTelegramMessage",
+        lambda secrets, text, replyMarkup=None, topicId=None: sentMessages.append(
+            (text, replyMarkup, topicId)
+        ),
+    )
+
+    assert dispatcher.dispatchNextEmailTriage(
+        {"SAGE_PROPOSAL_TOKEN": "proposal", "SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID": "7"},
+        FakeGoogleJobs(),
+    )
+    assert "Important email [PLACEMENT]" in sentMessages[0][0]
+    assert sentMessages[0][1]["inline_keyboard"][0][0]["callback_data"] == "approve:approval-1"
+    assert sentMessages[0][2] == 7
+    assert completed == [("college", "message-1", "PLACEMENT")]
+
+
 def testBuildsScheduledReportFromDurableOperationalContext(tmp_path, monkeypatch):
     """Scheduled reports receive current tasks and cases instead of inventing state."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
@@ -263,8 +342,8 @@ def testSearchesIndexedMailWithoutCallingGoogle(tmp_path, monkeypatch):
     assert "Room 201" in mailReply
 
 
-def testSearchesIndexedCalendarAndDriveWithoutCallingGoogle(tmp_path, monkeypatch):
-    """Telegram search commands read Calendar and Drive snapshots from SQLite only."""
+def testSearchesIndexedCalendarWithoutCallingGoogle(tmp_path, monkeypatch):
+    """The Calendar command reads the latest monitored snapshot from SQLite."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
     moduleSpec = spec_from_file_location("sageTelegramDispatcherGoogle", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
@@ -278,18 +357,54 @@ def testSearchesIndexedCalendarAndDriveWithoutCallingGoogle(tmp_path, monkeypatc
         connection.execute(
             "INSERT INTO calendar_events VALUES ('Placement interview', 'Technical round', 'Room 201', '2026-09-12T10:00:00+05:30', '2026-09-12T11:00:00+05:30')"
         )
-        connection.execute(
-            "CREATE TABLE drive_files (account_key TEXT, name TEXT, mime_type TEXT, modified_at TEXT, web_view_link TEXT)"
-        )
-        connection.execute(
-            "INSERT INTO drive_files VALUES ('college', 'Placement handbook.pdf', 'application/pdf', '2026-09-10T10:00:00Z', 'https://drive.google.com/file/1')"
-        )
     monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
 
     assert dispatcher.getLocalSearchCommand("/calendar placement") == ("calendar", "placement")
-    assert dispatcher.getLocalSearchCommand("/drive handbook") == ("drive", "handbook")
+    assert dispatcher.getLocalSearchCommand("/drive handbook") is None
     assert "Placement interview" in dispatcher.formatCalendarSearch(dispatcher.searchIndexedCalendar("placement"))
-    assert "Placement handbook.pdf" in dispatcher.formatDriveSearch(dispatcher.searchIndexedDrive("handbook"))
+
+
+def testParsesExplicitLiveDriveCommandsWithoutGuessingWrites():
+    """Search, folder creation, rename, and deletion have exact command contracts."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDriveCommands", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    assert dispatcher.getDriveCommand("/drive placement") == {"action": "SEARCH", "query": "placement"}
+    assert dispatcher.getDriveCommand("/drive-folder work | Applications") == {
+        "action": "CREATE_FOLDER", "accountKey": "work", "name": "Applications", "parentId": ""
+    }
+    assert dispatcher.getDriveCommand("/drive-rename personal | file_1 | Final.pdf") == {
+        "action": "RENAME", "accountKey": "personal", "fileId": "file_1", "name": "Final.pdf"
+    }
+    assert dispatcher.getDriveCommand("/drive-delete college | file_2 | Draft.pdf") == {
+        "action": "DELETE", "accountKey": "college", "fileId": "file_2", "name": "Draft.pdf"
+    }
+    assert dispatcher.getDriveCommand("rename something") is None
+
+
+def testLiveDriveSearchCallsEveryAccountWebhook(monkeypatch):
+    """An unqualified Drive query reads all four accounts live through n8n."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDriveLive", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    calls = []
+    monkeypatch.setattr(
+        dispatcher,
+        "postJson",
+        lambda url, payload, headers: calls.append((url, payload, headers)) or {"files": []},
+    )
+
+    assert dispatcher.searchLiveDrive({"SAGE_DRIVE_TOOL_TOKEN": "secret"}, "handbook") == []
+    assert [call[0].rsplit("/", 1)[-1] for call in calls] == [
+        "sage-drive-personal-work", "sage-drive-work", "sage-drive-personal", "sage-drive-college"
+    ]
+    assert all(call[1] == {"action": "SEARCH", "query": "handbook"} for call in calls)
+    assert all(call[2]["X-Sage-Drive-Token"] == "secret" for call in calls)
 
 
 def testBuildsRecentConversationWithoutCurrentMessageDuplication(tmp_path, monkeypatch):

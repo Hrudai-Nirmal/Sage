@@ -23,9 +23,11 @@ class OperatorStateRepository:
             "auditEvents": "SELECT COUNT(*) FROM audit_events",
             "cases": "SELECT COUNT(*) FROM cases WHERE status = 'ACTIVE'",
             "calendarEvents": "SELECT COUNT(*) FROM calendar_events",
+            "calendarReminders": "SELECT COUNT(*) FROM calendar_reminders WHERE status = 'PENDING'",
             "documents": "SELECT COUNT(*) FROM documents",
             "driveFiles": "SELECT COUNT(*) FROM drive_files",
             "emails": "SELECT COUNT(*) FROM email_messages",
+            "emailTriage": "SELECT COUNT(*) FROM email_triage_jobs WHERE status = 'PENDING'",
             "researchRuns": "SELECT COUNT(*) FROM research_runs",
             "schedules": "SELECT COUNT(*) FROM schedules WHERE status = 'ACTIVE'",
             "tasks": "SELECT COUNT(*) FROM tasks WHERE status = 'OPEN'",
@@ -57,9 +59,17 @@ class OperatorStateRepository:
                 """SELECT account_key, sender, subject, internal_date
                    FROM email_messages ORDER BY CAST(internal_date AS INTEGER) DESC LIMIT 20"""
             ).fetchall()
+            triageRows = connection.execute(
+                """SELECT account_key, message_id, status, attempts FROM email_triage_jobs
+                   ORDER BY next_attempt_at LIMIT 20"""
+            ).fetchall()
             calendarRows = connection.execute(
                 """SELECT summary, start_at, end_at, location
                    FROM calendar_events ORDER BY start_at LIMIT 20"""
+            ).fetchall()
+            reminderRows = connection.execute(
+                """SELECT text, due_at, status FROM calendar_reminders
+                   ORDER BY due_at LIMIT 20"""
             ).fetchall()
             driveRows = connection.execute(
                 """SELECT account_key, name, mime_type, modified_at
@@ -104,6 +114,10 @@ class OperatorStateRepository:
                 {"endAt": endAt, "location": location, "startAt": startAt, "summary": summary}
                 for summary, startAt, endAt, location in calendarRows
             ],
+            "calendarReminders": [
+                {"dueAt": dueAt, "status": reminderStatus, "text": reminderText}
+                for reminderText, dueAt, reminderStatus in reminderRows
+            ],
             "documents": [
                 {"importedAt": importedAt, "name": canonicalName, "originalName": originalName}
                 for canonicalName, originalName, importedAt in documentRows
@@ -115,6 +129,10 @@ class OperatorStateRepository:
             "emails": [
                 {"accountKey": accountKey, "internalDate": internalDate, "sender": sender, "subject": subject}
                 for accountKey, sender, subject, internalDate in emailRows
+            ],
+            "emailTriage": [
+                {"accountKey": accountKey, "attempts": attempts, "messageId": messageId, "status": triageStatus}
+                for accountKey, messageId, triageStatus, attempts in triageRows
             ],
             "researchRuns": [
                 {"query": query, "retrievedAt": retrievedAt}

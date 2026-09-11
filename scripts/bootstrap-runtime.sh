@@ -57,9 +57,14 @@ fi
 if [[ ! -f "${secretRoot}/google.env" ]]; then
   {
     print "SAGE_GOOGLE_INGRESS_TOKEN=$(openssl rand -hex 32)"
+    print "SAGE_DRIVE_TOOL_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_GOOGLE_CALENDAR_ACCOUNT_KEY=personal-work"
     print 'SAGE_GOOGLE_ACCOUNTS_JSON={}'
   } > "${secretRoot}/google.env"
+fi
+
+if ! grep -q '^SAGE_DRIVE_TOOL_TOKEN=' "${secretRoot}/google.env"; then
+  print "SAGE_DRIVE_TOOL_TOKEN=$(openssl rand -hex 32)" >> "${secretRoot}/google.env"
 fi
 
 if [[ ! -f "${secretRoot}/model-server.env" ]]; then

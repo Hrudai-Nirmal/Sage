@@ -61,6 +61,8 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "driveFiles": 0,
         "emails": 0,
         "calendarEvents": 0,
+        "calendarReminders": 0,
+        "emailTriage": 0,
         "researchRuns": 0,
         "schedules": 0,
         "tasks": 0,
@@ -73,6 +75,8 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "driveFiles": [],
         "emails": [],
         "calendarEvents": [],
+        "calendarReminders": [],
+        "emailTriage": [],
         "researchRuns": [],
         "schedules": [],
         "tasks": [],
@@ -348,6 +352,38 @@ def testCreatesTaskOnlyAfterApprovalConfirmation(tmp_path):
                 "title": "Review Sage approval flow",
             }
         ]
+
+
+def testQueuesDriveDeleteOnlyAfterIndependentApproval(tmp_path):
+    """A valid Drive target remains inert until the approval channel confirms it."""
+    databasePath = tmp_path / "sage.db"
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=databasePath,
+        proposalToken="proposal-token",
+    )
+    with TestClient(app) as client:
+        proposalResponse = client.post(
+            "/v1/approval-requests",
+            json={
+                "actionType": "DELETE_DRIVE_FILE",
+                "payload": {"accountKey": "work", "fileId": "file_123", "name": "Draft.pdf"},
+            },
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+        )
+        assert proposalResponse.status_code == 201
+        with sqlite3.connect(databasePath) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM drive_actions").fetchone()[0] == 0
+        confirmationResponse = client.post(
+            f"/v1/approval-requests/{proposalResponse.json()['id']}/confirm",
+            json={"approvedBy": "telegram:8961856168"},
+            headers={"X-Sage-Approval-Token": "approval-token"},
+        )
+    assert confirmationResponse.status_code == 200
+    with sqlite3.connect(databasePath) as connection:
+        assert connection.execute(
+            "SELECT action_type, account_key, file_id, status FROM drive_actions"
+        ).fetchone() == ("DELETE_DRIVE_FILE", "work", "file_123", "PENDING")
 
 
 def testCreatesCaseOnlyAfterApprovalConfirmation(tmp_path):

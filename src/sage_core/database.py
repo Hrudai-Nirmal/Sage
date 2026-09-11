@@ -170,6 +170,51 @@ class SageDatabase:
                     FOREIGN KEY (schedule_id) REFERENCES schedules(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS calendar_reminders (
+                    account_key TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    event_updated_at TEXT NOT NULL,
+                    due_at TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    error_type TEXT,
+                    completed_at TEXT,
+                    PRIMARY KEY (account_key, event_id),
+                    FOREIGN KEY (account_key, event_id)
+                        REFERENCES calendar_events(account_key, event_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS email_triage_jobs (
+                    account_key TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    error_type TEXT,
+                    completed_at TEXT,
+                    classification_json TEXT,
+                    PRIMARY KEY (account_key, message_id),
+                    FOREIGN KEY (account_key, message_id)
+                        REFERENCES email_messages(account_key, message_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS drive_actions (
+                    id TEXT PRIMARY KEY,
+                    action_type TEXT NOT NULL,
+                    account_key TEXT NOT NULL,
+                    file_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    error_type TEXT,
+                    completed_at TEXT,
+                    approval_request_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS telegram_messages (
                     message_id INTEGER PRIMARY KEY,
                     chat_id INTEGER NOT NULL,

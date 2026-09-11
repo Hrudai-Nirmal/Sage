@@ -67,7 +67,13 @@ class ApprovalStateRepository:
                 raise LookupError("Approval request was not found")
 
             actionType, expiresAt, payloadJson, status = approvalRow
-            if actionType not in {"CREATE_CASE", "CREATE_TASK", "CREATE_SCHEDULE"} or status != "PENDING":
+            supportedActions = {
+                "CREATE_CASE",
+                "CREATE_TASK",
+                "CREATE_SCHEDULE",
+                "DELETE_DRIVE_FILE",
+            }
+            if actionType not in supportedActions or status != "PENDING":
                 raise ValueError("Approval request cannot be fulfilled")
             if datetime.fromisoformat(expiresAt) <= datetime.now(UTC):
                 raise TimeoutError("Approval request has expired")
@@ -115,7 +121,7 @@ class ApprovalStateRepository:
                         approvalId,
                     ),
                 )
-            else:
+            elif actionType == "CREATE_SCHEDULE":
                 connection.execute(
                     """INSERT INTO schedules (
                         id, title, prompt, kind, status, recurrence, next_run_at,
@@ -128,6 +134,21 @@ class ApprovalStateRepository:
                         taskPayload["kind"],
                         taskPayload.get("recurrence"),
                         taskPayload["dueAt"],
+                        datetime.now(UTC).isoformat(),
+                        approvalId,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO drive_actions (
+                           id, action_type, account_key, file_id, name, status,
+                           next_attempt_at, approval_request_id
+                       ) VALUES (?, 'DELETE_DRIVE_FILE', ?, ?, ?, 'PENDING', ?, ?)""",
+                    (
+                        str(uuid4()),
+                        taskPayload["accountKey"],
+                        taskPayload["fileId"],
+                        taskPayload["name"],
                         datetime.now(UTC).isoformat(),
                         approvalId,
                     ),
