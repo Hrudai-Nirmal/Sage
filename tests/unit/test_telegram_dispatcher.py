@@ -495,6 +495,111 @@ def testLoadsVersionedSagePrompt():
     assert "explicit user approval" in prompt
 
 
+def testExecutesModelSelectedGmailToolAgainstRealIndexBoundary(tmp_path, monkeypatch):
+    """A structured Gmail call returns evidence instead of a capability denial."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramToolExecutor", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    databasePath = tmp_path / "sage.db"
+    with sqlite3.connect(databasePath) as connection:
+        connection.execute(
+            """CREATE TABLE email_messages (
+                account_key TEXT, sender TEXT, subject TEXT, snippet TEXT,
+                body_text TEXT, internal_date TEXT
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO email_messages VALUES (
+                'work', 'alerts@neon.tech', 'Usage alert', 'Review usage',
+                'Your project crossed its threshold', '1789092000000'
+            )"""
+        )
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+
+    toolResult = dispatcher.executeSageTool(
+        {}, "search_gmail", '{"query":"from:Neon"}', "Check email from Neon"
+    )
+
+    assert toolResult["status"] == "COMPLETE"
+    assert toolResult["source"] == "gmail-index"
+    assert toolResult["results"][0]["subject"] == "Usage alert"
+
+
+def testRejectsModelSelectedDriveMutationWithoutExplicitUserIntent(monkeypatch):
+    """A tool call alone cannot authorize a Drive mutation absent a direct request."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramToolPolicy", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    monkeypatch.setattr(
+        dispatcher,
+        "requestLiveDrive",
+        lambda *arguments, **keywordArguments: (_ for _ in ()).throw(
+            AssertionError("Drive must not be called")
+        ),
+    )
+
+    toolResult = dispatcher.executeSageTool(
+        {"SAGE_DRIVE_TOOL_TOKEN": "secret"},
+        "create_drive_folder",
+        '{"accountKey":"work","name":"Applications"}',
+        "What folders would help organize my applications?",
+    )
+
+    assert toolResult["status"] == "NEEDS_EXPLICIT_REQUEST"
+
+
+def testToolAwareConversationExecutesCallAndSynthesizesEvidence(monkeypatch):
+    """Ordinary language can invoke one real tool and return its grounded result."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramToolLoop", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelPayloads = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        if len(modelPayloads) == 1:
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "search_gmail", "arguments": '{"query":"from:Neon"}'},
+                        }],
+                    }
+                }]
+            }
+        return {"choices": [{"message": {"content": "No matching Neon email was found."}}]}
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(
+        dispatcher,
+        "executeSageTool",
+        lambda secrets, toolName, rawArguments, userMessage: {
+            "status": "COMPLETE", "source": "gmail-index", "results": []
+        },
+    )
+
+    reply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "Check if Neon emailed me"}],
+        "Check if Neon emailed me",
+    )
+
+    assert reply == "No matching Neon email was found."
+    assert modelPayloads[0]["tools"]
+    assert modelPayloads[1]["messages"][-1]["role"] == "tool"
+    assert modelPayloads[1]["messages"][-1]["tool_call_id"] == "call-1"
+
+
 def testFormatsVerifiedResearchLinksWithoutModelRewriting():
     """Research URLs are appended deterministically and can be recalled without a new search."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"

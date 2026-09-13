@@ -8,6 +8,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Sage Core is a FastAPI + SQLite service with durable modes, task/case/schedule approval gates, retryable scheduled delivery, separate proposal/approval/operator credentials, an audit trail, and an allowlisted Telegram ingress boundary.
 - Online research uses Tavily basic search plus local Trafilatura extraction, with bounded source counts, public-network URL checks, durable citations, and retrieval audit events.
 - Versioned role contracts in `prompts/` define Sage's user-facing authority and Iris's restricted background-analysis role. The dispatcher loads Sage's prompt for every model call.
+- Ordinary Telegram conversation uses a closed capability registry. Sage may select only implemented Gmail, Calendar, and Drive tools; deterministic validation and policy code executes each call, and the model receives the bounded result for its final answer.
 - Telegram images and image/PDF documents are bounded at 20 MB, inspected by Iris, synthesized by Sage, and removed from temporary storage after each request.
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
@@ -65,6 +66,8 @@ Google commands in Telegram use the following boundaries:
 - `/drive-folder work | Applications` creates a folder in the named account.
 - `/drive-rename personal | <file-id> | Final.pdf` renames one exact Drive item.
 - `/drive-delete college | <file-id> | Draft.pdf` creates a deletion approval card; deletion cannot run before approval.
+
+The slash commands are deterministic shortcuts, not the only interface. Ordinary phrasing can select the same registered capabilities through Qwen's native function calling. A turn may make at most three reads and at most one mutation; Drive mutations still require explicit user wording, and Drive deletion still produces the independent Telegram approval button instead of executing directly.
 
 Gmail polling never marks email read, changes labels, archives, drafts, or sends. Clear security, billing, placement, and deadline messages can trigger Notifications; suggested tasks remain approval-gated. Calendar creates deterministic reminders 10 minutes before timed events. Drive is never monitored in the background.
 

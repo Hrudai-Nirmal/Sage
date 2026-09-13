@@ -21,6 +21,7 @@ from sage_core.drive_action_state import DriveActionRepository
 from sage_core.email_intelligence import classifyEmail
 from sage_core.google_jobs import GoogleJobRepository
 from sage_core.schedule_state import ScheduleStateRepository
+from sage_core.tool_registry import getToolDefinitions, validateToolArguments
 
 
 DATA_ROOT = Path(os.environ.get("SAGE_DATA_ROOT", "/Users/hrudainirmal/SageData"))
@@ -319,6 +320,87 @@ def executeDriveCommand(secrets: dict[str, str], driveCommand: dict[str, str]) -
     actionLabel = "created" if action == "CREATE_FOLDER" else "renamed"
     fileName = str(response.get("name", driveCommand["name"]))
     return f"Drive item {actionLabel} in [{accountKey}]: {fileName}"
+
+
+def executeSageTool(
+    secrets: dict[str, str],
+    toolName: str,
+    rawArguments: str,
+    userMessage: str,
+) -> dict[str, object]:
+    """Execute one validated model-selected capability inside deterministic policy."""
+    try:
+        arguments = validateToolArguments(toolName, rawArguments)
+    except ValueError as error:
+        return {"status": "REJECTED", "error": str(error)}
+    if toolName == "search_gmail":
+        boundedEmailResults = []
+        for emailMessage in searchIndexedMail(arguments["query"]):
+            boundedEmailResults.append(
+                {
+                    **emailMessage,
+                    "bodyText": emailMessage["bodyText"][:2_000],
+                    "snippet": emailMessage["snippet"][:1_000],
+                }
+            )
+        return {
+            "status": "COMPLETE",
+            "source": "gmail-index",
+            "freshness": "Gmail is polled every five minutes",
+            "results": boundedEmailResults,
+        }
+    if toolName == "search_calendar":
+        boundedCalendarResults = []
+        for calendarEvent in searchIndexedCalendar(arguments["query"]):
+            boundedCalendarResults.append(
+                {
+                    **calendarEvent,
+                    "description": calendarEvent["description"][:2_000],
+                }
+            )
+        return {
+            "status": "COMPLETE",
+            "source": "calendar-index",
+            "freshness": "Calendar is polled every thirty minutes",
+            "results": boundedCalendarResults,
+        }
+    if toolName == "search_drive":
+        return {
+            "status": "COMPLETE",
+            "source": "google-drive-live",
+            "results": searchLiveDrive(secrets, arguments["query"]),
+        }
+
+    mutationPatterns = {
+        "create_drive_folder": r"\b(?:create|make|add)\b.*\b(?:drive|folder)\b",
+        "rename_drive_file": r"\brename\b.*\b(?:drive|file|folder|document)\b",
+        "delete_drive_file": r"\b(?:delete|remove)\b.*\b(?:drive|file|folder|document)\b",
+    }
+    if not re.search(mutationPatterns[toolName], userMessage, flags=re.IGNORECASE):
+        return {
+            "status": "NEEDS_EXPLICIT_REQUEST",
+            "error": "The user did not explicitly request this Drive mutation.",
+        }
+    driveAction = {
+        "create_drive_folder": "CREATE_FOLDER",
+        "rename_drive_file": "RENAME",
+        "delete_drive_file": "DELETE",
+    }[toolName]
+    driveCommand = {"action": driveAction, **arguments}
+    if driveAction != "DELETE":
+        return {
+            "status": "COMPLETE",
+            "source": "google-drive-live",
+            "result": executeDriveCommand(secrets, driveCommand),
+        }
+    approvalText = createApprovalCard(
+        secrets,
+        f"/drive-delete {arguments['accountKey']} | {arguments['fileId']} | {arguments['name']}",
+    )
+    return {
+        "status": "PENDING_APPROVAL",
+        "result": approvalText or "Drive deletion proposal could not be created.",
+    }
 
 
 def searchIndexedCalendar(query: str, resultLimit: int = 10) -> list[dict[str, str]]:
@@ -688,6 +770,95 @@ def postJson(url: str, payload: dict[str, object], headers: dict[str, str]) -> d
     request = Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
     with urlopen(request, timeout=180) as response:
         return json.loads(response.read())
+
+
+def runToolAwareConversation(
+    secrets: dict[str, str],
+    conversation: list[dict[str, object]],
+    userMessage: str,
+) -> str:
+    """Let Sage select validated capabilities, then synthesize from their evidence."""
+    modelHeaders = {
+        "Authorization": f"Bearer {secrets['SAGE_MODEL_API_KEY']}",
+        "Content-Type": "application/json",
+    }
+    modelMessages: list[dict[str, object]] = [
+        {"role": "system", "content": loadSystemPrompt("sage")},
+        *conversation,
+    ]
+    initialResponse = postJson(
+        MODEL_URL,
+        {
+            "model": MODEL_ID,
+            "messages": modelMessages,
+            "tools": getToolDefinitions(),
+            "tool_choice": "auto",
+            "max_tokens": 768,
+            "temperature": 0.4,
+        },
+        modelHeaders,
+    )
+    assistantMessage = dict(initialResponse["choices"][0]["message"])
+    toolCalls = assistantMessage.get("tool_calls")
+    if not isinstance(toolCalls, list) or not toolCalls:
+        directContent = assistantMessage.get("content")
+        if not isinstance(directContent, str) or not directContent.strip():
+            raise RuntimeError("Sage returned neither a reply nor a tool call")
+        return directContent.strip()
+    if len(toolCalls) > 3:
+        raise RuntimeError("Sage selected too many tools in one turn")
+
+    mutationToolNames = {
+        "create_drive_folder",
+        "delete_drive_file",
+        "rename_drive_file",
+    }
+    selectedMutationCount = sum(
+        1
+        for toolCall in toolCalls
+        if isinstance(toolCall, dict)
+        and dict(toolCall.get("function", {})).get("name") in mutationToolNames
+    )
+    if selectedMutationCount > 1:
+        raise RuntimeError("Sage may select at most one mutation in one turn")
+
+    modelMessages.append(assistantMessage)
+    for toolCall in toolCalls:
+        if not isinstance(toolCall, dict):
+            raise RuntimeError("Sage returned an invalid tool call")
+        toolCallId = toolCall.get("id")
+        functionCall = toolCall.get("function")
+        if not isinstance(toolCallId, str) or not isinstance(functionCall, dict):
+            raise RuntimeError("Sage returned an invalid tool call")
+        toolName = functionCall.get("name")
+        rawArguments = functionCall.get("arguments")
+        if not isinstance(toolName, str) or not isinstance(rawArguments, str):
+            raise RuntimeError("Sage returned an invalid tool function")
+        toolResult = executeSageTool(secrets, toolName, rawArguments, userMessage)
+        serializedResult = json.dumps(toolResult, ensure_ascii=False)
+        modelMessages.append(
+            {
+                "role": "tool",
+                "tool_call_id": toolCallId,
+                "name": toolName,
+                "content": serializedResult[:20_000],
+            }
+        )
+
+    finalResponse = postJson(
+        MODEL_URL,
+        {
+            "model": MODEL_ID,
+            "messages": modelMessages,
+            "max_tokens": 768,
+            "temperature": 0.3,
+        },
+        modelHeaders,
+    )
+    finalContent = finalResponse["choices"][0]["message"].get("content")
+    if not isinstance(finalContent, str) or not finalContent.strip():
+        raise RuntimeError("Sage returned an empty tool-aware reply")
+    return finalContent.strip()
 
 
 def sendTelegramMessage(
@@ -1139,14 +1310,32 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
                 setModelAgentState("com.sage.model-sage", True)
                 ecoLoadedAgents.add("com.sage.model-sage")
                 waitForSageModel(secrets)
-            modelResponse = postJson(
-                MODEL_URL,
-                {"model": MODEL_ID, "messages": [{"role": "system", "content": modelSystemContent}, {"role": "user", "content": modelUserContent}] if research is not None or attachment is not None else [{"role": "system", "content": modelSystemContent}, *getRecentConversation(messageId, messageText)], "max_tokens": 768, "temperature": 0.4 if research is not None or attachment is not None else 0.7},
-                {"Authorization": f"Bearer {secrets['SAGE_MODEL_API_KEY']}", "Content-Type": "application/json"},
-            )
-            replyText = str(modelResponse["choices"][0]["message"]["content"])
-            if research is not None:
-                replyText = f"{replyText}\n\n{formatResearchSources(research)}"
+            if research is None and attachment is None:
+                replyText = runToolAwareConversation(
+                    secrets,
+                    getRecentConversation(messageId, messageText),
+                    messageText,
+                )
+            else:
+                modelResponse = postJson(
+                    MODEL_URL,
+                    {
+                        "model": MODEL_ID,
+                        "messages": [
+                            {"role": "system", "content": modelSystemContent},
+                            {"role": "user", "content": modelUserContent},
+                        ],
+                        "max_tokens": 768,
+                        "temperature": 0.4,
+                    },
+                    {
+                        "Authorization": f"Bearer {secrets['SAGE_MODEL_API_KEY']}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                replyText = str(modelResponse["choices"][0]["message"]["content"])
+                if research is not None:
+                    replyText = f"{replyText}\n\n{formatResearchSources(research)}"
             sendTelegramMessage(secrets, replyText)
     except Exception as error:
         logging.error("Telegram message dispatch failed: %s", type(error).__name__)
