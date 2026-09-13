@@ -507,6 +507,22 @@ def executeSageTool(
                 "status": "NEEDS_EXPLICIT_REQUEST",
                 "error": "The user did not explicitly request sending this email.",
             }
+        explicitRecipients = {
+            recipient.casefold()
+            for recipient in re.findall(
+                r"\b(?:to|cc|bcc)\s+([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+                userMessage,
+                flags=re.IGNORECASE,
+            )
+        }
+        proposedRecipients = {
+            str(recipient).casefold() for recipient in arguments["to"]
+        }
+        if explicitRecipients and explicitRecipients != proposedRecipients:
+            return {
+                "status": "REJECTED",
+                "error": "The proposed recipients differ from the request.",
+            }
         recipientLabel = ", ".join(str(recipient) for recipient in arguments["to"])
         approvalText = sendApprovalRequest(
             secrets,

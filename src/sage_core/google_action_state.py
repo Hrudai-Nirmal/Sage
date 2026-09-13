@@ -172,6 +172,34 @@ class GoogleActionRepository:
                 (attempts, retryAt.isoformat(), errorType[:200], actionId),
             )
 
+    def quarantinePendingAction(self, actionId: str, reasonCode: str) -> None:
+        """Keep a known-invalid action for audit while making it ineligible for delivery."""
+        if not isinstance(actionId, str) or not actionId.strip():
+            raise ValueError("Google action ID is required")
+        if not isinstance(reasonCode, str) or not reasonCode.strip():
+            raise ValueError("Google action quarantine reason is required")
+        normalizedReason = reasonCode.strip()[:200]
+        with self.database.connectDatabase() as connection:
+            actionRow = connection.execute(
+                "SELECT action_type FROM google_actions WHERE id = ? AND status = 'PENDING'",
+                (actionId.strip(),),
+            ).fetchone()
+            if actionRow is None:
+                raise LookupError("Pending Google action was not found")
+            connection.execute(
+                "UPDATE google_actions SET status = 'QUARANTINED', error_type = ? WHERE id = ?",
+                (normalizedReason, actionId.strip()),
+            )
+            self.auditStateRepository.recordEvent(
+                connection=connection,
+                actor="sage:safety-guard",
+                actionType=str(actionRow[0]),
+                targetType="GOOGLE_ACTION",
+                targetId=actionId.strip(),
+                eventStatus="QUARANTINED",
+                metadata={"reason": normalizedReason},
+            )
+
     def recoverInterruptedActions(self) -> None:
         """Return actions interrupted by a restart to their current durable stage."""
         with self.database.connectDatabase() as connection:

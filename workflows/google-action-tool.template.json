@@ -22,7 +22,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\\\s@]+@[^\\\\s@]+\\\\.[^\\\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\\\r\\\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\\\r\\\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\r\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\r\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
       },
       "id": "gmail-action-validate-personal-work",
       "name": "Validate Gmail Action personal-work",
@@ -39,10 +39,10 @@
         "nodeCredentialType": "googleOAuth2Api",
         "method": "={{ $json.requestMethod }}",
         "url": "={{ $json.requestUrl }}",
-        "sendBody": "={{ $json.shouldSendBody }}",
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
         "options": {}
       },
       "id": "gmail-action-api-personal-work",
@@ -79,7 +79,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\\\s@]+@[^\\\\s@]+\\\\.[^\\\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\\\r\\\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\\\r\\\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\r\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\r\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
       },
       "id": "gmail-action-validate-work",
       "name": "Validate Gmail Action work",
@@ -96,10 +96,10 @@
         "nodeCredentialType": "googleOAuth2Api",
         "method": "={{ $json.requestMethod }}",
         "url": "={{ $json.requestUrl }}",
-        "sendBody": "={{ $json.shouldSendBody }}",
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
         "options": {}
       },
       "id": "gmail-action-api-work",
@@ -136,7 +136,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\\\s@]+@[^\\\\s@]+\\\\.[^\\\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\\\r\\\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\\\r\\\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\r\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\r\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
       },
       "id": "gmail-action-validate-personal",
       "name": "Validate Gmail Action personal",
@@ -153,10 +153,10 @@
         "nodeCredentialType": "googleOAuth2Api",
         "method": "={{ $json.requestMethod }}",
         "url": "={{ $json.requestUrl }}",
-        "sendBody": "={{ $json.shouldSendBody }}",
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
         "options": {}
       },
       "id": "gmail-action-api-personal",
@@ -193,7 +193,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\\\s@]+@[^\\\\s@]+\\\\.[^\\\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\\\r\\\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\\\r\\\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_DRAFT','SEND_DRAFT'].includes(action)) throw new Error('Unsupported Gmail action');\nlet requestUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';\nlet requestBody = {};\nif (action === 'CREATE_DRAFT') {\n  const recipients = Array.isArray(input.to) ? input.to : [];\n  const subject = String(input.subject ?? '');\n  const body = String(input.body ?? '');\n  if (!recipients.length || recipients.length > 20 || recipients.some(value => !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value)))) throw new Error('Invalid Gmail recipients');\n  if (subject.length > 2000 || /[\\r\\n]/.test(subject)) throw new Error('Invalid Gmail subject');\n  if (!body || body.length > 50000) throw new Error('Invalid Gmail body');\n  const messageId = String(input.messageId ?? '');\n  if (!/^[a-f0-9]{32,64}$/.test(messageId)) throw new Error('Invalid Gmail idempotency message ID');\n  const rawMessage = [`To: ${recipients.join(', ')}`, `Subject: ${subject}`, `Message-ID: <${messageId}@sage.local>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\\r\\n');\n  requestBody = {message:{raw:Buffer.from(rawMessage,'utf8').toString('base64url')}};\n} else {\n  const draftId = String(input.draftId ?? '');\n  if (!draftId || draftId.length > 1000) throw new Error('Invalid Gmail draft ID');\n  requestUrl += '/send';\n  requestBody = {id:draftId};\n}\nreturn [{json:{action,requestMethod:'POST',requestUrl,requestBody,shouldSendBody:true}}];"
       },
       "id": "gmail-action-validate-college",
       "name": "Validate Gmail Action college",
@@ -210,10 +210,10 @@
         "nodeCredentialType": "googleOAuth2Api",
         "method": "={{ $json.requestMethod }}",
         "url": "={{ $json.requestUrl }}",
-        "sendBody": "={{ $json.shouldSendBody }}",
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
         "options": {}
       },
       "id": "gmail-action-api-college",
@@ -250,7 +250,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_CALENDAR_EVENT','UPDATE_CALENDAR_EVENT','DELETE_CALENDAR_EVENT'].includes(action)) throw new Error('Unsupported Calendar action');\nconst eventId = String(input.eventId ?? '');\nif (!eventId || eventId.length > 1000 || /[\\\\r\\\\n]/.test(eventId)) throw new Error('Invalid Calendar event ID');\nconst encodedEventId = encodeURIComponent(eventId);\nconst requestMethod = {CREATE_CALENDAR_EVENT:'PUT',UPDATE_CALENDAR_EVENT:'PATCH',DELETE_CALENDAR_EVENT:'DELETE'}[action];\nconst requestUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodedEventId}?sendUpdates=all`;\nlet requestBody = {};\nif (action !== 'DELETE_CALENDAR_EVENT') {\n  const allowedFields = ['summary','description','location'];\n  for (const field of allowedFields) if (input[field] !== undefined) requestBody[field] = String(input[field]);\n  if (input.startAt !== undefined) requestBody.start = {dateTime:String(input.startAt)};\n  if (input.endAt !== undefined) requestBody.end = {dateTime:String(input.endAt)};\n  if (action === 'CREATE_CALENDAR_EVENT' && (!requestBody.summary || !requestBody.start || !requestBody.end)) throw new Error('Incomplete Calendar event');\n  if (action === 'UPDATE_CALENDAR_EVENT' && Object.keys(requestBody).length === 0) throw new Error('Empty Calendar update');\n}\nreturn [{json:{action,requestMethod,requestUrl,requestBody,shouldSendBody:action !== 'DELETE_CALENDAR_EVENT'}}];"
+        "jsCode": "const input = $json.body ?? {};\nif ($json.headers?.['x-sage-google-action-token'] !== $env.SAGE_GOOGLE_ACTION_TOKEN) throw new Error('Unauthorized Google action request');\nconst action = String(input.action ?? '');\nif (!['CREATE_CALENDAR_EVENT','UPDATE_CALENDAR_EVENT','DELETE_CALENDAR_EVENT'].includes(action)) throw new Error('Unsupported Calendar action');\nconst eventId = String(input.eventId ?? '');\nif (!eventId || eventId.length > 1000 || /[\\r\\n]/.test(eventId)) throw new Error('Invalid Calendar event ID');\nconst encodedEventId = encodeURIComponent(eventId);\nconst requestMethod = {CREATE_CALENDAR_EVENT:'PUT',UPDATE_CALENDAR_EVENT:'PATCH',DELETE_CALENDAR_EVENT:'DELETE'}[action];\nconst requestUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodedEventId}?sendUpdates=all`;\nlet requestBody = {};\nif (action !== 'DELETE_CALENDAR_EVENT') {\n  const allowedFields = ['summary','description','location'];\n  for (const field of allowedFields) if (input[field] !== undefined) requestBody[field] = String(input[field]);\n  if (input.startAt !== undefined) requestBody.start = {dateTime:String(input.startAt)};\n  if (input.endAt !== undefined) requestBody.end = {dateTime:String(input.endAt)};\n  if (action === 'CREATE_CALENDAR_EVENT' && (!requestBody.summary || !requestBody.start || !requestBody.end)) throw new Error('Incomplete Calendar event');\n  if (action === 'UPDATE_CALENDAR_EVENT' && Object.keys(requestBody).length === 0) throw new Error('Empty Calendar update');\n}\nreturn [{json:{action,requestMethod,requestUrl,requestBody,shouldSendBody:action !== 'DELETE_CALENDAR_EVENT'}}];"
       },
       "id": "calendar-action-validate-personal-work",
       "name": "Validate Calendar Action personal-work",

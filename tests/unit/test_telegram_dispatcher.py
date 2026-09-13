@@ -733,10 +733,20 @@ def testGmailSendAlwaysCreatesApprovalInsteadOfCallingGoogle(monkeypatch):
         "Send this email now",
         "msg-3",
     )
+    mismatchedRecipientResult = dispatcher.executeSageTool(
+        {},
+        "send_gmail_message",
+        '{"accountKey":"work","to":["typo@example.com"],"subject":"Hello","body":"Hi"}',
+        "Send this email to person@example.com now",
+        "msg-4",
+    )
 
     assert draftOnlyResult["status"] == "NEEDS_EXPLICIT_REQUEST"
     assert toolResult["status"] == "PENDING_APPROVAL"
+    assert mismatchedRecipientResult["status"] == "REJECTED"
+    assert mismatchedRecipientResult["error"] == "The proposed recipients differ from the request."
     assert proposals[0][0] == "SEND_GMAIL_MESSAGE"
+    assert len(proposals) == 1
 
 
 def testConfirmedEmailDraftForcesTrustedApprovalProposal(monkeypatch):

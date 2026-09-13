@@ -105,6 +105,34 @@ def testSensitiveProposalIsIdempotentForOneTelegramMessage(tmp_path):
         assert connection.execute("SELECT COUNT(*) FROM approval_requests").fetchone()[0] == 1
 
 
+def testMalformedPendingGoogleActionCanBeQuarantinedWithAuditEvidence(tmp_path):
+    """A known-invalid action must remain durable but become ineligible for delivery."""
+    database = SageDatabase(tmp_path / "sage.db")
+    actionRepository = GoogleActionRepository(database)
+    action = actionRepository.queueAction(
+        "SEND_GMAIL_MESSAGE",
+        "work",
+        {
+            "to": ["typo@example.com"],
+            "subject": "Incorrect proposal",
+            "body": "Placeholder body",
+        },
+        "gmail:invalid-proposal",
+    )
+
+    actionRepository.quarantinePendingAction(action["id"], "RECIPIENT_MISMATCH")
+
+    assert actionRepository.claimPendingAction(datetime(2026, 9, 14, tzinfo=UTC)) is None
+    with database.connectDatabase() as connection:
+        assert connection.execute(
+            "SELECT status, error_type FROM google_actions WHERE id = ?", (action["id"],)
+        ).fetchone() == ("QUARANTINED", "RECIPIENT_MISMATCH")
+        assert connection.execute(
+            "SELECT status FROM audit_events WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (action["id"],),
+        ).fetchone() == ("QUARANTINED",)
+
+
 def testApprovedCalendarDeleteBecomesOneOutboxAction(tmp_path):
     """Calendar deletion remains inert until a valid approval is applied."""
     database = SageDatabase(tmp_path / "sage.db")

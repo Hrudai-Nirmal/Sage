@@ -48,3 +48,42 @@ def testGoogleActionTokenIsGeneratedAndAvailableToDispatcherAndN8n():
     assert 'DATA_ROOT / "secrets" / "google.env"' in (
         projectRoot / "scripts" / "run-telegram-dispatcher.py"
     ).read_text()
+
+
+def testGmailValidationUsesExecutableJavaScriptRegexEscapes():
+    """Rendered Code nodes must validate ordinary recipients and actual header newlines."""
+    workflowPath = Path(__file__).parents[2] / "workflows" / "google-action-tool.template.json"
+    workflow = json.loads(workflowPath.read_text())
+    gmailValidationNodes = [
+        node
+        for node in workflow["nodes"]
+        if str(node.get("id", "")).startswith("gmail-action-validate-")
+    ]
+    gmailApiNodes = [
+        node
+        for node in workflow["nodes"]
+        if str(node.get("id", "")).startswith("gmail-action-api-")
+    ]
+    calendarValidationNode = next(
+        node
+        for node in workflow["nodes"]
+        if node.get("id") == "calendar-action-validate-personal-work"
+    )
+
+    assert len(gmailValidationNodes) == 4
+    assert len(gmailApiNodes) == 4
+    for validationNode in gmailValidationNodes:
+        validationCode = validationNode["parameters"]["jsCode"]
+        assert r"/^[^\s@]+@[^\s@]+\.[^\s@]+$/" in validationCode
+        assert r"/[\r\n]/" in validationCode
+        assert r".join('\r\n')" in validationCode
+        assert r"[^\\s@]" not in validationCode
+    for apiNode in gmailApiNodes:
+        parameters = apiNode["parameters"]
+        assert parameters["sendBody"] is True
+        assert parameters["contentType"] == "json"
+        assert parameters["specifyBody"] == "json"
+        assert parameters["jsonBody"] == "={{ $json.requestBody }}"
+    calendarValidationCode = calendarValidationNode["parameters"]["jsCode"]
+    assert r"/[\r\n]/" in calendarValidationCode
+    assert r"/[\\r\\n]/" not in calendarValidationCode
