@@ -63,6 +63,7 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "calendarEvents": 0,
         "calendarReminders": 0,
         "emailTriage": 0,
+        "googleActions": 0,
         "researchRuns": 0,
         "schedules": 0,
         "tasks": 0,
@@ -77,6 +78,7 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "calendarEvents": [],
         "calendarReminders": [],
         "emailTriage": [],
+        "googleActions": [],
         "researchRuns": [],
         "schedules": [],
         "tasks": [],
@@ -190,6 +192,71 @@ def testRejectsGmailMessageAssignedToWrongConfiguredAccount(tmp_path):
         )
 
     assert response.status_code == 403
+
+
+def testGoogleSendAndDeleteProposalsRequireIndependentConfirmation(tmp_path):
+    """Core validates sensitive Google actions and queues them only after approval."""
+    databasePath = tmp_path / "sage.db"
+    app = createApp(
+        databasePath=databasePath,
+        proposalToken="proposal-token",
+        approvalToken="approval-token",
+    )
+    proposalHeaders = {"X-Sage-Proposal-Token": "proposal-token"}
+    approvalHeaders = {"X-Sage-Approval-Token": "approval-token"}
+
+    with TestClient(app) as client:
+        sendProposal = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={
+                "actionType": "SEND_GMAIL_MESSAGE",
+                "payload": {
+                    "accountKey": "work",
+                    "to": ["person@example.com"],
+                    "subject": "Hello",
+                    "body": "Hi",
+                },
+            },
+        )
+        deleteProposal = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={
+                "actionType": "DELETE_CALENDAR_EVENT",
+                "payload": {
+                    "accountKey": "personal-work",
+                    "eventId": "event-1",
+                    "summary": "Old event",
+                },
+            },
+        )
+        invalidHeaderProposal = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={
+                "actionType": "SEND_GMAIL_MESSAGE",
+                "payload": {
+                    "accountKey": "work",
+                    "to": ["person@example.com"],
+                    "subject": "Hello\nBcc: attacker@example.com",
+                    "body": "Hi",
+                },
+            },
+        )
+        client.post(
+            f"/v1/approval-requests/{sendProposal.json()['id']}/confirm",
+            headers=approvalHeaders,
+            json={"approvedBy": "telegram:8961856168"},
+        )
+
+    assert sendProposal.status_code == 201
+    assert deleteProposal.status_code == 201
+    assert invalidHeaderProposal.status_code == 422
+    with sqlite3.connect(databasePath) as connection:
+        assert connection.execute(
+            "SELECT action_type, stage FROM google_actions"
+        ).fetchall() == [("SEND_GMAIL_MESSAGE", "CREATE_DRAFT")]
 
 
 def testIndexesPersonalWorkCalendarAndAllAccountDriveFiles(tmp_path):

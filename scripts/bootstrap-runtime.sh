@@ -58,6 +58,7 @@ if [[ ! -f "${secretRoot}/google.env" ]]; then
   {
     print "SAGE_GOOGLE_INGRESS_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_DRIVE_TOOL_TOKEN=$(openssl rand -hex 32)"
+    print "SAGE_GOOGLE_ACTION_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_GOOGLE_CALENDAR_ACCOUNT_KEY=personal-work"
     print 'SAGE_GOOGLE_ACCOUNTS_JSON={}'
   } > "${secretRoot}/google.env"

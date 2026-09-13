@@ -19,18 +19,22 @@ class ApprovalStateRepository:
         self.auditStateRepository = AuditStateRepository(database)
 
     def createProposal(
-        self, actionType: str, payload: dict[str, str | None]
+        self,
+        actionType: str,
+        payload: dict[str, object],
+        idempotencyKey: str | None = None,
     ) -> dict[str, str]:
         """Store a supported proposal without changing the associated personal state."""
         approvalId = str(uuid4())
         createdAt = datetime.now(UTC)
         expiresAt = createdAt + timedelta(hours=24)
         with self.database.connectDatabase() as connection:
-            connection.execute(
+            insertResult = connection.execute(
                 """
-                INSERT INTO approval_requests (
-                    id, action_type, payload_json, status, created_at, expires_at
-                ) VALUES (?, ?, ?, 'PENDING', ?, ?)
+                INSERT OR IGNORE INTO approval_requests (
+                    id, action_type, payload_json, status, created_at, expires_at,
+                    idempotency_key
+                ) VALUES (?, ?, ?, 'PENDING', ?, ?, ?)
                 """,
                 (
                     approvalId,
@@ -38,8 +42,17 @@ class ApprovalStateRepository:
                     json.dumps(payload),
                     createdAt.isoformat(),
                     expiresAt.isoformat(),
+                    idempotencyKey,
                 ),
             )
+            if insertResult.rowcount == 0:
+                existingRow = connection.execute(
+                    "SELECT id, status FROM approval_requests WHERE idempotency_key = ?",
+                    (idempotencyKey,),
+                ).fetchone()
+                if existingRow is None:
+                    raise RuntimeError("Approval proposal could not be deduplicated")
+                return {"id": str(existingRow[0]), "status": str(existingRow[1])}
             self.auditStateRepository.recordEvent(
                 actionType=actionType,
                 actor="sage-proposal-channel",
@@ -71,7 +84,9 @@ class ApprovalStateRepository:
                 "CREATE_CASE",
                 "CREATE_TASK",
                 "CREATE_SCHEDULE",
+                "DELETE_CALENDAR_EVENT",
                 "DELETE_DRIVE_FILE",
+                "SEND_GMAIL_MESSAGE",
             }
             if actionType not in supportedActions or status != "PENDING":
                 raise ValueError("Approval request cannot be fulfilled")
@@ -138,7 +153,7 @@ class ApprovalStateRepository:
                         approvalId,
                     ),
                 )
-            else:
+            elif actionType == "DELETE_DRIVE_FILE":
                 connection.execute(
                     """INSERT INTO drive_actions (
                            id, action_type, account_key, file_id, name, status,
@@ -149,6 +164,25 @@ class ApprovalStateRepository:
                         taskPayload["accountKey"],
                         taskPayload["fileId"],
                         taskPayload["name"],
+                        datetime.now(UTC).isoformat(),
+                        approvalId,
+                    ),
+                )
+            else:
+                actionStage = "CREATE_DRAFT" if actionType == "SEND_GMAIL_MESSAGE" else "EXECUTE"
+                accountKey = taskPayload.get("accountKey", "personal-work")
+                connection.execute(
+                    """INSERT INTO google_actions (
+                           id, idempotency_key, action_type, account_key, payload_json,
+                           stage, status, next_attempt_at, approval_request_id
+                       ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)""",
+                    (
+                        str(uuid4()),
+                        f"approval:{approvalId}",
+                        actionType,
+                        accountKey,
+                        json.dumps(taskPayload, sort_keys=True),
+                        actionStage,
                         datetime.now(UTC).isoformat(),
                         approvalId,
                     ),

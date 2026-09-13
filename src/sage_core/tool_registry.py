@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
+import re
 
 
 ACCOUNT_KEYS = {"personal-work", "work", "personal", "college"}
@@ -62,6 +64,88 @@ def getToolDefinitions() -> list[dict[str, object]]:
         {
             "type": "function",
             "function": {
+                "name": "send_gmail_message",
+                "description": (
+                    "Prepare an email for independent user approval. This never sends directly; "
+                    "use it only when the user explicitly asks to send an email and supplies the "
+                    "account, recipients, subject, and complete body."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "accountKey": accountSchema,
+                        "to": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "email"},
+                            "minItems": 1,
+                            "maxItems": 20,
+                        },
+                        "subject": {"type": "string", "maxLength": 2000},
+                        "body": {"type": "string", "minLength": 1, "maxLength": 50000},
+                    },
+                    ["accountKey", "to", "subject", "body"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_calendar_event",
+                "description": (
+                    "Queue a personal-work Calendar event only after the user explicitly asks to "
+                    "create it and supplies exact timezone-aware start and end times."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                        "startAt": {"type": "string", "maxLength": 100},
+                        "endAt": {"type": "string", "maxLength": 100},
+                        "description": {"type": "string", "maxLength": 50000},
+                        "location": {"type": "string", "maxLength": 2000},
+                    },
+                    ["summary", "startAt", "endAt"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_calendar_event",
+                "description": (
+                    "Queue an explicit update to one exact personal-work Calendar event."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "eventId": {"type": "string", "minLength": 1, "maxLength": 1000},
+                        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                        "startAt": {"type": "string", "maxLength": 100},
+                        "endAt": {"type": "string", "maxLength": 100},
+                        "description": {"type": "string", "maxLength": 50000},
+                        "location": {"type": "string", "maxLength": 2000},
+                    },
+                    ["eventId"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_calendar_event",
+                "description": (
+                    "Propose deletion of one exact personal-work Calendar event. Execution always "
+                    "requires the user's independent approval button."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "eventId": {"type": "string", "minLength": 1, "maxLength": 1000},
+                        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    },
+                    ["eventId", "summary"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "create_drive_folder",
                 "description": (
                     "Create a Google Drive folder only when the user explicitly requests it."
@@ -114,7 +198,7 @@ def getToolDefinitions() -> list[dict[str, object]]:
     ]
 
 
-def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, str]:
+def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]:
     """Parse and validate untrusted model-selected tool arguments."""
     supportedTools = {
         tool["function"]["name"] for tool in getToolDefinitions()
@@ -134,6 +218,41 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, str]:
         if not isinstance(query, str) or len(query) > 2_000:
             raise ValueError("Tool query must be a string of at most 2000 characters")
         return {"query": query}
+
+    if toolName == "send_gmail_message":
+        _rejectUnknownKeys(arguments, {"accountKey", "to", "subject", "body"})
+        if arguments.get("accountKey") not in ACCOUNT_KEYS:
+            raise ValueError("Gmail account is not configured")
+        recipients = arguments.get("to")
+        if not isinstance(recipients, list) or not 1 <= len(recipients) <= 20:
+            raise ValueError("Gmail recipient list must contain between 1 and 20 emails")
+        emailPattern = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+        if any(not isinstance(recipient, str) or not emailPattern.fullmatch(recipient) for recipient in recipients):
+            raise ValueError("Every Gmail recipient must be a valid email address")
+        subject = arguments.get("subject")
+        body = arguments.get("body")
+        if (
+            not isinstance(subject, str)
+            or len(subject) > 2_000
+            or "\r" in subject
+            or "\n" in subject
+        ):
+            raise ValueError("Gmail subject must be one header-safe line of at most 2000 characters")
+        if not isinstance(body, str) or not body.strip() or len(body) > 50_000:
+            raise ValueError("Gmail body must be between 1 and 50000 characters")
+        return {
+            "accountKey": str(arguments["accountKey"]),
+            "to": recipients,
+            "subject": subject.strip(),
+            "body": body,
+        }
+
+    if toolName in {
+        "create_calendar_event",
+        "update_calendar_event",
+        "delete_calendar_event",
+    }:
+        return _validateCalendarArguments(toolName, arguments)
 
     requiredKeys = {"accountKey", "name"}
     if toolName != "create_drive_folder":
@@ -168,3 +287,48 @@ def _rejectUnknownKeys(arguments: dict[str, object], allowedKeys: set[str]) -> N
     """Reject extra model fields rather than silently broadening a request."""
     if set(arguments) - allowedKeys:
         raise ValueError("Tool arguments contain unsupported fields")
+
+
+def _validateCalendarArguments(
+    toolName: str, arguments: dict[str, object]
+) -> dict[str, object]:
+    """Validate exact Calendar targets without inventing event details."""
+    fieldLimits = {
+        "description": 50_000,
+        "endAt": 100,
+        "eventId": 1_000,
+        "location": 2_000,
+        "startAt": 100,
+        "summary": 2_000,
+    }
+    allowedKeys = set(fieldLimits)
+    _rejectUnknownKeys(arguments, allowedKeys)
+    requiredKeys = {
+        "create_calendar_event": {"summary", "startAt", "endAt"},
+        "update_calendar_event": {"eventId"},
+        "delete_calendar_event": {"eventId", "summary"},
+    }[toolName]
+    if not requiredKeys.issubset(arguments):
+        raise ValueError("Calendar tool is missing a required argument")
+    validatedArguments: dict[str, object] = {}
+    for fieldName, fieldValue in arguments.items():
+        if not isinstance(fieldValue, str) or len(fieldValue) > fieldLimits[fieldName]:
+            raise ValueError(f"Calendar {fieldName} is invalid")
+        if fieldName in requiredKeys and not fieldValue.strip():
+            raise ValueError(f"Calendar {fieldName} is required")
+        validatedArguments[fieldName] = fieldValue.strip()
+    if toolName == "update_calendar_event" and set(arguments) == {"eventId"}:
+        raise ValueError("Calendar update must contain at least one changed field")
+    if "startAt" in arguments or "endAt" in arguments:
+        if not {"startAt", "endAt"}.issubset(arguments):
+            raise ValueError("Calendar startAt and endAt must be supplied together")
+        try:
+            startAt = datetime.fromisoformat(str(arguments["startAt"]))
+            endAt = datetime.fromisoformat(str(arguments["endAt"]))
+        except ValueError as error:
+            raise ValueError("Calendar times must be valid ISO timestamps") from error
+        if startAt.tzinfo is None or endAt.tzinfo is None:
+            raise ValueError("Calendar times must include a timezone")
+        if endAt <= startAt:
+            raise ValueError("Calendar end time must be after its start time")
+    return validatedArguments

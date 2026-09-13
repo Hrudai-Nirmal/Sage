@@ -28,6 +28,7 @@ class OperatorStateRepository:
             "driveFiles": "SELECT COUNT(*) FROM drive_files",
             "emails": "SELECT COUNT(*) FROM email_messages",
             "emailTriage": "SELECT COUNT(*) FROM email_triage_jobs WHERE status = 'PENDING'",
+            "googleActions": "SELECT COUNT(*) FROM google_actions WHERE status != 'COMPLETE'",
             "researchRuns": "SELECT COUNT(*) FROM research_runs",
             "schedules": "SELECT COUNT(*) FROM schedules WHERE status = 'ACTIVE'",
             "tasks": "SELECT COUNT(*) FROM tasks WHERE status = 'OPEN'",
@@ -70,6 +71,10 @@ class OperatorStateRepository:
             reminderRows = connection.execute(
                 """SELECT text, due_at, status FROM calendar_reminders
                    ORDER BY due_at LIMIT 20"""
+            ).fetchall()
+            googleActionRows = connection.execute(
+                """SELECT action_type, account_key, stage, status, attempts
+                   FROM google_actions ORDER BY next_attempt_at LIMIT 20"""
             ).fetchall()
             driveRows = connection.execute(
                 """SELECT account_key, name, mime_type, modified_at
@@ -133,6 +138,16 @@ class OperatorStateRepository:
             "emailTriage": [
                 {"accountKey": accountKey, "attempts": attempts, "messageId": messageId, "status": triageStatus}
                 for accountKey, messageId, triageStatus, attempts in triageRows
+            ],
+            "googleActions": [
+                {
+                    "accountKey": accountKey,
+                    "actionType": actionType,
+                    "attempts": attempts,
+                    "stage": actionStage,
+                    "status": actionStatus,
+                }
+                for actionType, accountKey, actionStage, actionStatus, attempts in googleActionRows
             ],
             "researchRuns": [
                 {"query": query, "retrievedAt": retrievedAt}

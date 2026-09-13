@@ -69,7 +69,14 @@ Google commands in Telegram use the following boundaries:
 
 The slash commands are deterministic shortcuts, not the only interface. Ordinary phrasing can select the same registered capabilities through Qwen's native function calling. A turn may make at most three reads and at most one mutation; Drive mutations still require explicit user wording, and Drive deletion still produces the independent Telegram approval button instead of executing directly.
 
-Gmail polling never marks email read, changes labels, archives, drafts, or sends. Clear security, billing, placement, and deadline messages can trigger Notifications; suggested tasks remain approval-gated. Calendar creates deterministic reminders 10 minutes before timed events. Drive is never monitored in the background.
+Ordinary chat also supports explicit Google actions with complete details:
+
+- Gmail sending is available from any configured account, but every message is shown in a one-time Telegram approval card. Approval creates a durable two-stage outbox job: first a Gmail draft is created, its remote ID is saved, and only then is that exact draft sent.
+- Calendar creation and updates are queued only for the personal-work account when the event target and timezone-aware times are explicit. Sage never guesses missing event details.
+- Calendar deletion always creates a one-time Telegram approval card. Approved Calendar operations use a durable retry queue, and creates use a stable Google event ID so retries do not duplicate the event.
+- The local operator dashboard shows pending Google outbox stages and retry counts without exposing email bodies.
+
+Gmail polling never marks email read or changes labels/archives; outbound mail runs only through the separately approved outbox. Clear security, billing, placement, and deadline messages can trigger Notifications; suggested tasks remain approval-gated. Calendar creates deterministic reminders 10 minutes before timed events. Drive is never monitored in the background.
 
 Send a photo, JPEG/PNG/WebP document, or PDF in Main for Iris-assisted analysis. PDFs currently analyze the first rendered page. Telegram-reported sizes are checked when present and downloaded bytes are always capped at 20 MB; temporary files are deleted after the request.
 

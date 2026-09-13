@@ -41,7 +41,8 @@ class SageDatabase:
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
-                    approved_by TEXT
+                    approved_by TEXT,
+                    idempotency_key TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -215,6 +216,23 @@ class SageDatabase:
                     FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS google_actions (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    action_type TEXT NOT NULL,
+                    account_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    error_type TEXT,
+                    remote_id TEXT,
+                    completed_at TEXT,
+                    approval_request_id TEXT UNIQUE,
+                    FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS telegram_messages (
                     message_id INTEGER PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -243,6 +261,11 @@ class SageDatabase:
             self._addTelegramColumnIfMissing(connection, "dispatch_status", "TEXT NOT NULL DEFAULT 'PENDING'")
             self._addTelegramColumnIfMissing(connection, "reply_text", "TEXT")
             self._addTelegramColumnIfMissing(connection, "attachment_json", "TEXT")
+            self._addApprovalColumnIfMissing(connection, "idempotency_key", "TEXT")
+            connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS approval_requests_idempotency_key
+                   ON approval_requests(idempotency_key) WHERE idempotency_key IS NOT NULL"""
+            )
 
     def _addTaskColumnIfMissing(
         self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
@@ -265,3 +288,16 @@ class SageDatabase:
         }
         if columnName not in messageColumns:
             connection.execute(f"ALTER TABLE telegram_messages ADD COLUMN {columnName} {columnDefinition}")
+
+    def _addApprovalColumnIfMissing(
+        self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
+    ) -> None:
+        """Add proposal deduplication without discarding previous approval history."""
+        approvalColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute("PRAGMA table_info(approval_requests)").fetchall()
+        }
+        if columnName not in approvalColumns:
+            connection.execute(
+                f"ALTER TABLE approval_requests ADD COLUMN {columnName} {columnDefinition}"
+            )

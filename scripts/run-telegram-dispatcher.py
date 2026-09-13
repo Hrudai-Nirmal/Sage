@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime
+import hashlib
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ from sage_core.database import SageDatabase
 from sage_core.drive_action_state import DriveActionRepository
 from sage_core.email_intelligence import classifyEmail
 from sage_core.google_jobs import GoogleJobRepository
+from sage_core.google_action_state import GoogleActionRepository
 from sage_core.schedule_state import ScheduleStateRepository
 from sage_core.tool_registry import getToolDefinitions, validateToolArguments
 
@@ -32,6 +34,15 @@ IRIS_URL = "http://127.0.0.1:18081/v1/chat/completions"
 IRIS_MODEL_ID = str(DATA_ROOT / "models" / "qwen3-vl-2b-instruct-4bit")
 CORE_URL = "http://127.0.0.1:8787"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MUTATION_TOOL_NAMES = {
+    "create_calendar_event",
+    "create_drive_folder",
+    "delete_calendar_event",
+    "delete_drive_file",
+    "rename_drive_file",
+    "send_gmail_message",
+    "update_calendar_event",
+}
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
@@ -322,11 +333,23 @@ def executeDriveCommand(secrets: dict[str, str], driveCommand: dict[str, str]) -
     return f"Drive item {actionLabel} in [{accountKey}]: {fileName}"
 
 
+def queueGoogleAction(
+    actionType: str,
+    accountKey: str,
+    payload: dict[str, object],
+    requestKey: str,
+) -> dict[str, str]:
+    """Place an explicit Google mutation into the durable local outbox."""
+    actionRepository = GoogleActionRepository(SageDatabase(DATABASE_PATH))
+    return actionRepository.queueAction(actionType, accountKey, payload, requestKey)
+
+
 def executeSageTool(
     secrets: dict[str, str],
     toolName: str,
     rawArguments: str,
     userMessage: str,
+    requestKey: str = "",
 ) -> dict[str, object]:
     """Execute one validated model-selected capability inside deterministic policy."""
     try:
@@ -369,6 +392,77 @@ def executeSageTool(
             "status": "COMPLETE",
             "source": "google-drive-live",
             "results": searchLiveDrive(secrets, arguments["query"]),
+        }
+
+    if toolName == "send_gmail_message":
+        if not re.search(r"\bsend\b", userMessage, flags=re.IGNORECASE):
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not explicitly request sending this email.",
+            }
+        recipientLabel = ", ".join(str(recipient) for recipient in arguments["to"])
+        approvalText = sendApprovalRequest(
+            secrets,
+            "SEND_GMAIL_MESSAGE",
+            arguments,
+            (
+                f"Send Gmail message from [{arguments['accountKey']}]\n"
+                f"To: {recipientLabel}\nSubject: {arguments['subject']}\n\n{arguments['body']}"
+            ),
+            f"{requestKey}:SEND_GMAIL_MESSAGE" if requestKey else "",
+        )
+        return {"status": "PENDING_APPROVAL", "result": approvalText}
+
+    calendarMutationPatterns = {
+        "create_calendar_event": (
+            r"\b(?:create|add|schedule|put)\b.*"
+            r"\b(?:calendar|event|meeting|appointment|interview)\b"
+        ),
+        "update_calendar_event": (
+            r"\b(?:update|change|move|rename|reschedule|edit)\b.*"
+            r"\b(?:calendar|event|meeting|appointment|interview)\b"
+        ),
+        "delete_calendar_event": (
+            r"\b(?:delete|remove|cancel)\b.*"
+            r"\b(?:calendar|event|meeting|appointment|interview)\b"
+        ),
+    }
+    if toolName in calendarMutationPatterns:
+        if not re.search(calendarMutationPatterns[toolName], userMessage, flags=re.IGNORECASE):
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not explicitly request this Calendar mutation.",
+            }
+        if toolName == "delete_calendar_event":
+            calendarPayload = {"accountKey": "personal-work", **arguments}
+            approvalText = sendApprovalRequest(
+                secrets,
+                "DELETE_CALENDAR_EVENT",
+                calendarPayload,
+                f"Delete Calendar event permanently: {arguments['summary']}",
+                f"{requestKey}:DELETE_CALENDAR_EVENT" if requestKey else "",
+            )
+            return {"status": "PENDING_APPROVAL", "result": approvalText}
+        actionType = {
+            "create_calendar_event": "CREATE_CALENDAR_EVENT",
+            "update_calendar_event": "UPDATE_CALENDAR_EVENT",
+        }[toolName]
+        calendarPayload = dict(arguments)
+        actionRequestKey = requestKey or hashlib.sha256(
+            f"{toolName}:{rawArguments}:{userMessage}".encode()
+        ).hexdigest()
+        if toolName == "create_calendar_event":
+            calendarPayload["eventId"] = hashlib.sha256(actionRequestKey.encode()).hexdigest()[:32]
+        queuedAction = queueGoogleAction(
+            actionType,
+            "personal-work",
+            calendarPayload,
+            f"{actionType}:{actionRequestKey}",
+        )
+        return {
+            "status": "QUEUED",
+            "source": "google-action-outbox",
+            "actionId": queuedAction["id"],
         }
 
     mutationPatterns = {
@@ -416,14 +510,14 @@ def searchIndexedCalendar(query: str, resultLimit: int = 10) -> list[dict[str, s
     queryValues.append(resultLimit)
     with sqlite3.connect(DATABASE_PATH) as connection:
         eventRows = connection.execute(
-            f"""SELECT summary, description, location, start_at, end_at
+            f"""SELECT event_id, summary, description, location, start_at, end_at
                 FROM calendar_events {whereSql} ORDER BY start_at LIMIT ?""",
             queryValues,
         ).fetchall()
     return [
-        {"summary": str(summary), "description": str(description), "location": str(location),
+        {"eventId": str(eventId), "summary": str(summary), "description": str(description), "location": str(location),
          "startAt": str(startAt), "endAt": str(endAt)}
-        for summary, description, location, startAt, endAt in eventRows
+        for eventId, summary, description, location, startAt, endAt in eventRows
     ]
 
 
@@ -772,10 +866,56 @@ def postJson(url: str, payload: dict[str, object], headers: dict[str, str]) -> d
         return json.loads(response.read())
 
 
+def _countMutationCalls(toolCalls: list[object]) -> int:
+    """Count model-selected mutations without trusting tool-call shapes."""
+    return sum(
+        1
+        for toolCall in toolCalls
+        if isinstance(toolCall, dict)
+        and isinstance(toolCall.get("function"), dict)
+        and toolCall["function"].get("name") in MUTATION_TOOL_NAMES
+    )
+
+
+def _appendExecutedToolCalls(
+    modelMessages: list[dict[str, object]],
+    assistantMessage: dict[str, object],
+    toolCalls: list[object],
+    secrets: dict[str, str],
+    userMessage: str,
+    requestKey: str,
+) -> None:
+    """Validate, execute, and append one bounded batch of model-selected tools."""
+    modelMessages.append(assistantMessage)
+    for toolCall in toolCalls:
+        if not isinstance(toolCall, dict):
+            raise RuntimeError("Sage returned an invalid tool call")
+        toolCallId = toolCall.get("id")
+        functionCall = toolCall.get("function")
+        if not isinstance(toolCallId, str) or not isinstance(functionCall, dict):
+            raise RuntimeError("Sage returned an invalid tool call")
+        toolName = functionCall.get("name")
+        rawArguments = functionCall.get("arguments")
+        if not isinstance(toolName, str) or not isinstance(rawArguments, str):
+            raise RuntimeError("Sage returned an invalid tool function")
+        toolResult = executeSageTool(
+            secrets, toolName, rawArguments, userMessage, requestKey
+        )
+        modelMessages.append(
+            {
+                "role": "tool",
+                "tool_call_id": toolCallId,
+                "name": toolName,
+                "content": json.dumps(toolResult, ensure_ascii=False)[:20_000],
+            }
+        )
+
+
 def runToolAwareConversation(
     secrets: dict[str, str],
     conversation: list[dict[str, object]],
     userMessage: str,
+    requestKey: str = "",
 ) -> str:
     """Let Sage select validated capabilities, then synthesize from their evidence."""
     modelHeaders = {
@@ -808,54 +948,53 @@ def runToolAwareConversation(
     if len(toolCalls) > 3:
         raise RuntimeError("Sage selected too many tools in one turn")
 
-    mutationToolNames = {
-        "create_drive_folder",
-        "delete_drive_file",
-        "rename_drive_file",
-    }
-    selectedMutationCount = sum(
-        1
-        for toolCall in toolCalls
-        if isinstance(toolCall, dict)
-        and dict(toolCall.get("function", {})).get("name") in mutationToolNames
-    )
+    selectedMutationCount = _countMutationCalls(toolCalls)
     if selectedMutationCount > 1:
         raise RuntimeError("Sage may select at most one mutation in one turn")
-
-    modelMessages.append(assistantMessage)
-    for toolCall in toolCalls:
-        if not isinstance(toolCall, dict):
-            raise RuntimeError("Sage returned an invalid tool call")
-        toolCallId = toolCall.get("id")
-        functionCall = toolCall.get("function")
-        if not isinstance(toolCallId, str) or not isinstance(functionCall, dict):
-            raise RuntimeError("Sage returned an invalid tool call")
-        toolName = functionCall.get("name")
-        rawArguments = functionCall.get("arguments")
-        if not isinstance(toolName, str) or not isinstance(rawArguments, str):
-            raise RuntimeError("Sage returned an invalid tool function")
-        toolResult = executeSageTool(secrets, toolName, rawArguments, userMessage)
-        serializedResult = json.dumps(toolResult, ensure_ascii=False)
-        modelMessages.append(
-            {
-                "role": "tool",
-                "tool_call_id": toolCallId,
-                "name": toolName,
-                "content": serializedResult[:20_000],
-            }
-        )
+    _appendExecutedToolCalls(
+        modelMessages, assistantMessage, toolCalls, secrets, userMessage, requestKey
+    )
 
     finalResponse = postJson(
         MODEL_URL,
         {
             "model": MODEL_ID,
             "messages": modelMessages,
+            "tools": getToolDefinitions(),
+            "tool_choice": "auto",
             "max_tokens": 768,
             "temperature": 0.3,
         },
         modelHeaders,
     )
-    finalContent = finalResponse["choices"][0]["message"].get("content")
+    followupMessage = dict(finalResponse["choices"][0]["message"])
+    followupToolCalls = followupMessage.get("tool_calls")
+    if isinstance(followupToolCalls, list) and followupToolCalls:
+        if len(toolCalls) + len(followupToolCalls) > 3:
+            raise RuntimeError("Sage selected too many tools in one turn")
+        followupMutationCount = _countMutationCalls(followupToolCalls)
+        if selectedMutationCount + followupMutationCount > 1:
+            raise RuntimeError("Sage may select at most one mutation in one turn")
+        _appendExecutedToolCalls(
+            modelMessages,
+            followupMessage,
+            followupToolCalls,
+            secrets,
+            userMessage,
+            requestKey,
+        )
+        finalResponse = postJson(
+            MODEL_URL,
+            {
+                "model": MODEL_ID,
+                "messages": modelMessages,
+                "max_tokens": 768,
+                "temperature": 0.3,
+            },
+            modelHeaders,
+        )
+        followupMessage = dict(finalResponse["choices"][0]["message"])
+    finalContent = followupMessage.get("content")
     if not isinstance(finalContent, str) or not finalContent.strip():
         raise RuntimeError("Sage returned an empty tool-aware reply")
     return finalContent.strip()
@@ -1048,8 +1187,41 @@ def dispatchNextEmailTriage(
         return False
 
 
-def createApprovalCard(secrets: dict[str, str], messageText: str) -> str | None:
-    """Create an explicit command proposal and send its one-time approval controls."""
+def sendApprovalRequest(
+    secrets: dict[str, str],
+    actionType: str,
+    payload: dict[str, object],
+    label: str,
+    idempotencyKey: str = "",
+) -> str:
+    """Create one constrained proposal and send independent Telegram controls."""
+    proposal = postJson(
+        f"{CORE_URL}/v1/approval-requests",
+        {
+            "actionType": actionType,
+            "payload": payload,
+            **({"idempotencyKey": idempotencyKey} if idempotencyKey else {}),
+        },
+        {
+            "Content-Type": "application/json",
+            "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
+        },
+    )
+    approvalId = str(proposal["id"])
+    sendTelegramReplyMarkup = {
+        "inline_keyboard": [[
+            {"text": "Approve", "callback_data": f"approve:{approvalId}"},
+            {"text": "Decline", "callback_data": f"decline:{approvalId}"},
+        ]]
+    }
+    sendTelegramMessage(secrets, f"Approval required\n\n{label}", sendTelegramReplyMarkup)
+    return "Approval card sent. No change will occur until you choose an option."
+
+
+def createApprovalCard(
+    secrets: dict[str, str], messageText: str, idempotencyKey: str = ""
+) -> str | None:
+    """Parse an exact command and create its one-time approval controls."""
     if messageText.startswith("/task "):
         title = messageText.removeprefix("/task ").strip()
         actionType = "CREATE_TASK"
@@ -1083,26 +1255,7 @@ def createApprovalCard(secrets: dict[str, str], messageText: str) -> str | None:
         return None
     if actionType != "DELETE_DRIVE_FILE" and not payload.get("title"):
         return None
-    proposal = postJson(
-        f"{CORE_URL}/v1/approval-requests",
-        {"actionType": actionType, "payload": payload},
-        {
-            "Content-Type": "application/json",
-            "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
-        },
-    )
-    approvalId = str(proposal["id"])
-    sendTelegramMessage(
-        secrets,
-        f"Approval required\n\n{label}",
-        {
-            "inline_keyboard": [[
-                {"text": "Approve", "callback_data": f"approve:{approvalId}"},
-                {"text": "Decline", "callback_data": f"decline:{approvalId}"},
-            ]]
-        },
-    )
-    return "Approval card sent. No change will occur until you choose an option."
+    return sendApprovalRequest(secrets, actionType, payload, label, idempotencyKey)
 
 
 def dispatchNextDriveAction(
@@ -1134,6 +1287,96 @@ def dispatchNextDriveAction(
         )
     except Exception as error:
         logging.warning("Drive completion notification failed: %s", type(error).__name__)
+    return True
+
+
+def requestGoogleAction(
+    secrets: dict[str, str], googleAction: dict[str, object]
+) -> dict[str, object]:
+    """Execute one claimed outbox stage through its credential-bound n8n webhook."""
+    actionType = str(googleAction["actionType"])
+    accountKey = str(googleAction["accountKey"])
+    payload = dict(googleAction["payload"])
+    if actionType == "SEND_GMAIL_MESSAGE":
+        webhookPath = f"sage-gmail-action-{accountKey}"
+        if googleAction["stage"] == "CREATE_DRAFT":
+            requestPayload = {
+                "action": "CREATE_DRAFT",
+                "body": payload["body"],
+                "messageId": hashlib.sha256(str(googleAction["id"]).encode()).hexdigest(),
+                "subject": payload["subject"],
+                "to": payload["to"],
+            }
+        elif googleAction["stage"] == "SEND_DRAFT":
+            requestPayload = {
+                "action": "SEND_DRAFT",
+                "draftId": str(googleAction["remoteId"]),
+            }
+        else:
+            raise ValueError("Unsupported Gmail outbox stage")
+    elif actionType in {
+        "CREATE_CALENDAR_EVENT",
+        "DELETE_CALENDAR_EVENT",
+        "UPDATE_CALENDAR_EVENT",
+    } and accountKey == "personal-work":
+        webhookPath = "sage-calendar-action-personal-work"
+        requestPayload = {"action": actionType, **payload}
+    else:
+        raise ValueError("Unsupported Google outbox action")
+    return postJson(
+        f"http://127.0.0.1:5678/webhook/{webhookPath}",
+        requestPayload,
+        {
+            "Content-Type": "application/json",
+            "X-Sage-Google-Action-Token": secrets["SAGE_GOOGLE_ACTION_TOKEN"],
+        },
+    )
+
+
+def dispatchNextGoogleAction(
+    secrets: dict[str, str], googleActionRepository: GoogleActionRepository
+) -> bool:
+    """Deliver one Google outbox stage with durable state and bounded retries."""
+    if getCurrentMode() in {"SLEEP", "SHUTDOWN"}:
+        return False
+    googleAction = googleActionRepository.claimPendingAction()
+    if googleAction is None:
+        return False
+    actionId = str(googleAction["id"])
+    try:
+        actionResponse = requestGoogleAction(secrets, googleAction)
+        if (
+            googleAction["actionType"] == "SEND_GMAIL_MESSAGE"
+            and googleAction["stage"] == "CREATE_DRAFT"
+        ):
+            draftId = str(actionResponse.get("id", ""))
+            if not draftId:
+                raise RuntimeError("Gmail did not return a draft ID")
+            googleActionRepository.stageGmailDraft(actionId, draftId)
+            return True
+        remoteId = str(actionResponse.get("id", googleAction.get("remoteId", "")))
+        googleActionRepository.completeAction(actionId, remoteId)
+    except Exception as error:
+        logging.error("Google action failed: %s", type(error).__name__)
+        googleActionRepository.failAction(actionId, type(error).__name__)
+        return False
+
+    actionLabels = {
+        "CREATE_CALENDAR_EVENT": "Created Calendar event",
+        "DELETE_CALENDAR_EVENT": "Deleted Calendar event",
+        "SEND_GMAIL_MESSAGE": "Sent Gmail message",
+        "UPDATE_CALENDAR_EVENT": "Updated Calendar event",
+    }
+    payload = dict(googleAction["payload"])
+    itemLabel = str(payload.get("summary") or payload.get("subject") or "(untitled)")
+    try:
+        sendTelegramMessage(
+            secrets,
+            f"{actionLabels[str(googleAction['actionType'])]}: {itemLabel}",
+            topicId=int(secrets["SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID"]),
+        )
+    except Exception as error:
+        logging.warning("Google action completion notification failed: %s", type(error).__name__)
     return True
 
 
@@ -1244,7 +1487,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
             replyText = "Sage is sleeping. Use /normal or /eco when you need me."
             sendTelegramMessage(secrets, replyText)
         else:
-            replyText = createApprovalCard(secrets, messageText)
+            replyText = createApprovalCard(secrets, messageText, f"telegram:{messageId}")
         if replyText is None and isSourceFollowup(messageText):
             latestResearch = getLatestResearch()
             replyText = (
@@ -1315,6 +1558,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
                     secrets,
                     getRecentConversation(messageId, messageText),
                     messageText,
+                    f"telegram:{messageId}",
                 )
             else:
                 modelResponse = postJson(
@@ -1367,12 +1611,14 @@ def main() -> None:
     database = SageDatabase(DATABASE_PATH)
     scheduleStateRepository = ScheduleStateRepository(database)
     googleJobRepository = GoogleJobRepository(database)
+    googleActionRepository = GoogleActionRepository(database)
     driveActionRepository = DriveActionRepository(database)
     recoverInterruptedWork()
     scheduleStateRepository.recoverInterruptedDeliveries()
     googleJobRepository.backfillCalendarReminders()
     googleJobRepository.recoverInterruptedJobs()
     driveActionRepository.recoverInterruptedActions()
+    googleActionRepository.recoverInterruptedActions()
     previousMode: str | None = None
     while True:
         try:
@@ -1384,6 +1630,7 @@ def main() -> None:
             dispatchNextCalendarReminder(secrets, googleJobRepository)
             dispatchNextEmailTriage(secrets, googleJobRepository)
             dispatchNextDriveAction(secrets, driveActionRepository)
+            dispatchNextGoogleAction(secrets, googleActionRepository)
         except Exception as error:
             logging.error("Telegram dispatcher iteration failed: %s", type(error).__name__)
         time.sleep(3)

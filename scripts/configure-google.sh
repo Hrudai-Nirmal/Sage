@@ -31,9 +31,11 @@ mkdir -p "${secretRoot}"
 umask 077
 googleIngressToken=""
 driveToolToken=""
+googleActionToken=""
 if [[ -f "${googleFile}" ]]; then
   googleIngressToken="$(/usr/bin/awk -F= '$1 == "SAGE_GOOGLE_INGRESS_TOKEN" { print $2; exit }' "${googleFile}")"
   driveToolToken="$(/usr/bin/awk -F= '$1 == "SAGE_DRIVE_TOOL_TOKEN" { print $2; exit }' "${googleFile}")"
+  googleActionToken="$(/usr/bin/awk -F= '$1 == "SAGE_GOOGLE_ACTION_TOKEN" { print $2; exit }' "${googleFile}")"
 fi
 if [[ -z "${googleIngressToken}" ]]; then
   googleIngressToken="$(openssl rand -hex 32)"
@@ -41,12 +43,16 @@ fi
 if [[ -z "${driveToolToken}" ]]; then
   driveToolToken="$(openssl rand -hex 32)"
 fi
+if [[ -z "${googleActionToken}" ]]; then
+  googleActionToken="$(openssl rand -hex 32)"
+fi
 
 temporaryFile="$(/usr/bin/mktemp "${secretRoot}/google.env.XXXXXX")"
 trap '/bin/rm -f "${temporaryFile}"' EXIT
 {
   print "SAGE_GOOGLE_INGRESS_TOKEN=${googleIngressToken}"
   print "SAGE_DRIVE_TOOL_TOKEN=${driveToolToken}"
+  print "SAGE_GOOGLE_ACTION_TOKEN=${googleActionToken}"
   print "SAGE_GOOGLE_CALENDAR_ACCOUNT_KEY=personal-work"
   print "SAGE_GOOGLE_ACCOUNTS_JSON={\"personal-work\":\"${personalWorkEmail}\",\"work\":\"${workEmail}\",\"personal\":\"${personalEmail}\",\"college\":\"${collegeEmail}\"}"
 } > "${temporaryFile}"

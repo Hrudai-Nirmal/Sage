@@ -95,6 +95,51 @@ class DriveDeleteApprovalRequestPayload(BaseModel):
     payload: DriveDeleteProposalPayload
 
 
+class GmailSendProposalPayload(BaseModel):
+    """Validate one complete Gmail message before presenting its approval card."""
+
+    accountKey: Literal["personal-work", "work", "personal", "college"]
+    body: str = Field(min_length=1, max_length=50_000)
+    subject: str = Field(max_length=2_000)
+    to: list[str] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validateRecipients(self) -> "GmailSendProposalPayload":
+        """Reject malformed recipients before content enters the durable outbox."""
+        import re
+
+        emailPattern = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+        if any(len(recipient) > 320 or not emailPattern.fullmatch(recipient) for recipient in self.to):
+            raise ValueError("Every Gmail recipient must be a valid email address")
+        if "\r" in self.subject or "\n" in self.subject:
+            raise ValueError("Gmail subject must be one header-safe line")
+        return self
+
+
+class GmailSendApprovalRequestPayload(BaseModel):
+    """Require independent confirmation before sending any Gmail message."""
+
+    actionType: Literal["SEND_GMAIL_MESSAGE"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    payload: GmailSendProposalPayload
+
+
+class CalendarDeleteProposalPayload(BaseModel):
+    """Validate one exact personal-work Calendar deletion target."""
+
+    accountKey: Literal["personal-work"]
+    eventId: str = Field(min_length=1, max_length=1_000)
+    summary: str = Field(min_length=1, max_length=2_000)
+
+
+class CalendarDeleteApprovalRequestPayload(BaseModel):
+    """Require independent confirmation before Calendar deletion."""
+
+    actionType: Literal["DELETE_CALENDAR_EVENT"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    payload: CalendarDeleteProposalPayload
+
+
 class ApprovalConfirmationPayload(BaseModel):
     """Capture the independently verified Telegram actor who approved an action."""
 
@@ -306,6 +351,8 @@ def createApp(
             | CaseApprovalRequestPayload
             | ScheduleApprovalRequestPayload
             | DriveDeleteApprovalRequestPayload
+            | GmailSendApprovalRequestPayload
+            | CalendarDeleteApprovalRequestPayload
         ),
         sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
     ) -> dict[str, str]:
@@ -314,6 +361,7 @@ def createApp(
         return approvalStateRepository.createProposal(
             actionType=approvalRequest.actionType,
             payload=approvalRequest.payload.model_dump(),
+            idempotencyKey=getattr(approvalRequest, "idempotencyKey", None),
         )
 
     @app.post("/v1/approval-requests/{approvalId}/confirm")

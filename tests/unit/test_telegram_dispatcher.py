@@ -400,16 +400,19 @@ def testSearchesIndexedCalendarWithoutCallingGoogle(tmp_path, monkeypatch):
     databasePath = tmp_path / "sage.db"
     with sqlite3.connect(databasePath) as connection:
         connection.execute(
-            "CREATE TABLE calendar_events (summary TEXT, description TEXT, location TEXT, start_at TEXT, end_at TEXT)"
+            "CREATE TABLE calendar_events (event_id TEXT, summary TEXT, description TEXT, location TEXT, start_at TEXT, end_at TEXT)"
         )
         connection.execute(
-            "INSERT INTO calendar_events VALUES ('Placement interview', 'Technical round', 'Room 201', '2026-09-12T10:00:00+05:30', '2026-09-12T11:00:00+05:30')"
+            "INSERT INTO calendar_events VALUES ('event-1', 'Placement interview', 'Technical round', 'Room 201', '2026-09-12T10:00:00+05:30', '2026-09-12T11:00:00+05:30')"
         )
     monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
 
     assert dispatcher.getLocalSearchCommand("/calendar placement") == ("calendar", "placement")
     assert dispatcher.getLocalSearchCommand("/drive handbook") is None
-    assert "Placement interview" in dispatcher.formatCalendarSearch(dispatcher.searchIndexedCalendar("placement"))
+    events = dispatcher.searchIndexedCalendar("placement")
+
+    assert events[0]["eventId"] == "event-1"
+    assert "Placement interview" in dispatcher.formatCalendarSearch(events)
 
 
 def testParsesExplicitLiveDriveCommandsWithoutGuessingWrites():
@@ -583,7 +586,7 @@ def testToolAwareConversationExecutesCallAndSynthesizesEvidence(monkeypatch):
     monkeypatch.setattr(
         dispatcher,
         "executeSageTool",
-        lambda secrets, toolName, rawArguments, userMessage: {
+        lambda secrets, toolName, rawArguments, userMessage, requestKey="": {
             "status": "COMPLETE", "source": "gmail-index", "results": []
         },
     )
@@ -598,6 +601,239 @@ def testToolAwareConversationExecutesCallAndSynthesizesEvidence(monkeypatch):
     assert modelPayloads[0]["tools"]
     assert modelPayloads[1]["messages"][-1]["role"] == "tool"
     assert modelPayloads[1]["messages"][-1]["tool_call_id"] == "call-1"
+
+
+def testToolAwareConversationCanSearchThenMutateAnExactCalendarEvent(monkeypatch):
+    """A second bounded tool round can use a search result's exact Calendar event ID."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramMultiToolLoop", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelCallCount = 0
+    executedTools = []
+
+    def fakePostJson(url, payload, headers):
+        nonlocal modelCallCount
+        modelCallCount += 1
+        if modelCallCount == 1:
+            return {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "search-1", "type": "function", "function": {
+                    "name": "search_calendar", "arguments": '{"query":"Interview"}'
+                }
+            }]}}]}
+        if modelCallCount == 2:
+            return {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "update-1", "type": "function", "function": {
+                    "name": "update_calendar_event",
+                    "arguments": '{"eventId":"event-1","summary":"Updated interview"}',
+                }
+            }]}}]}
+        return {"choices": [{"message": {"content": "The Calendar update is queued."}}]}
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(
+        dispatcher,
+        "executeSageTool",
+        lambda secrets, toolName, rawArguments, userMessage, requestKey="": executedTools.append(
+            toolName
+        ) or {"status": "COMPLETE"},
+    )
+
+    reply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "Rename my Interview calendar event"}],
+        "Rename my Interview calendar event",
+        "telegram:9",
+    )
+
+    assert reply == "The Calendar update is queued."
+    assert executedTools == ["search_calendar", "update_calendar_event"]
+    assert modelCallCount == 3
+
+
+def testCalendarCreateQueuesDurablyOnlyForExplicitRequest(monkeypatch):
+    """An explicit Calendar create is queued; advisory conversation cannot mutate it."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramCalendarCreate", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    queuedActions = []
+    monkeypatch.setattr(
+        dispatcher,
+        "queueGoogleAction",
+        lambda actionType, accountKey, payload, requestKey: queuedActions.append(
+            (actionType, accountKey, payload, requestKey)
+        ) or {"id": "action-1", "status": "PENDING"},
+    )
+    arguments = (
+        '{"summary":"Interview","startAt":"2026-09-15T10:00:00+05:30",'
+        '"endAt":"2026-09-15T11:00:00+05:30"}'
+    )
+
+    rejectedResult = dispatcher.executeSageTool(
+        {}, "create_calendar_event", arguments, "What time is best for an interview?", "msg-1"
+    )
+    queuedResult = dispatcher.executeSageTool(
+        {}, "create_calendar_event", arguments, "Create a calendar event for the interview", "msg-2"
+    )
+    updatedResult = dispatcher.executeSageTool(
+        {},
+        "update_calendar_event",
+        '{"eventId":"event-1","summary":"Updated interview"}',
+        "Rename my Interview calendar event to Updated interview",
+        "msg-3",
+    )
+
+    assert rejectedResult["status"] == "NEEDS_EXPLICIT_REQUEST"
+    assert queuedResult["status"] == "QUEUED"
+    assert updatedResult["status"] == "QUEUED"
+    assert queuedActions[0][0] == "CREATE_CALENDAR_EVENT"
+    assert queuedActions[0][2]["eventId"]
+    assert queuedActions[1][0] == "UPDATE_CALENDAR_EVENT"
+
+
+def testGmailSendAlwaysCreatesApprovalInsteadOfCallingGoogle(monkeypatch):
+    """Even explicit send wording can only create a Telegram approval proposal."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramGmailSend", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    proposals = []
+    monkeypatch.setattr(
+        dispatcher,
+        "sendApprovalRequest",
+        lambda secrets, actionType, payload, label, idempotencyKey="": proposals.append(
+            (actionType, payload, label)
+        ) or "Approval card sent.",
+    )
+
+    draftOnlyResult = dispatcher.executeSageTool(
+        {},
+        "send_gmail_message",
+        '{"accountKey":"work","to":["person@example.com"],"subject":"Hello","body":"Hi"}',
+        "Help me draft an email to this person",
+        "msg-2",
+    )
+    toolResult = dispatcher.executeSageTool(
+        {},
+        "send_gmail_message",
+        '{"accountKey":"work","to":["person@example.com"],"subject":"Hello","body":"Hi"}',
+        "Send this email now",
+        "msg-3",
+    )
+
+    assert draftOnlyResult["status"] == "NEEDS_EXPLICIT_REQUEST"
+    assert toolResult["status"] == "PENDING_APPROVAL"
+    assert proposals[0][0] == "SEND_GMAIL_MESSAGE"
+
+
+def testGoogleActionWorkerStagesGmailDraftBeforeSending(monkeypatch):
+    """The worker persists a Gmail draft ID before a later send attempt."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramGoogleWorker", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    class FakeRepository:
+        def __init__(self):
+            self.staged = []
+            self.completed = []
+            self.failed = []
+
+        def claimPendingAction(self):
+            return {
+                "id": "action-1",
+                "actionType": "SEND_GMAIL_MESSAGE",
+                "accountKey": "work",
+                "payload": {
+                    "to": ["person@example.com"],
+                    "subject": "Hello",
+                    "body": "Hi",
+                },
+                "stage": "CREATE_DRAFT",
+                "remoteId": "",
+            }
+
+        def stageGmailDraft(self, actionId, draftId):
+            self.staged.append((actionId, draftId))
+
+        def completeAction(self, actionId, remoteId=""):
+            self.completed.append((actionId, remoteId))
+
+        def failAction(self, actionId, errorType):
+            self.failed.append((actionId, errorType))
+
+    actionRepository = FakeRepository()
+    calls = []
+    monkeypatch.setattr(dispatcher, "getCurrentMode", lambda: "NORMAL")
+    monkeypatch.setattr(
+        dispatcher,
+        "requestGoogleAction",
+        lambda secrets, action: calls.append(action) or {"id": "draft-1"},
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "sendTelegramMessage",
+        lambda *arguments, **keywordArguments: (_ for _ in ()).throw(
+            AssertionError("Draft staging must not announce an unsent email")
+        ),
+    )
+
+    assert dispatcher.dispatchNextGoogleAction({}, actionRepository)
+    assert calls[0]["stage"] == "CREATE_DRAFT"
+    assert actionRepository.staged == [("action-1", "draft-1")]
+    assert actionRepository.completed == []
+
+
+def testGoogleActionWorkerCompletesCalendarMutationAndNotifies(monkeypatch):
+    """A successful Calendar API result completes and announces the durable action."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramCalendarWorker", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    class FakeRepository:
+        def __init__(self):
+            self.completed = []
+
+        def claimPendingAction(self):
+            return {
+                "id": "action-2",
+                "actionType": "CREATE_CALENDAR_EVENT",
+                "accountKey": "personal-work",
+                "payload": {"eventId": "event-1", "summary": "Interview"},
+                "stage": "EXECUTE",
+                "remoteId": "",
+            }
+
+        def completeAction(self, actionId, remoteId=""):
+            self.completed.append((actionId, remoteId))
+
+        def failAction(self, actionId, errorType):
+            raise AssertionError(errorType)
+
+    actionRepository = FakeRepository()
+    notifications = []
+    monkeypatch.setattr(dispatcher, "getCurrentMode", lambda: "NORMAL")
+    monkeypatch.setattr(
+        dispatcher, "requestGoogleAction", lambda secrets, action: {"id": "event-1"}
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "sendTelegramMessage",
+        lambda secrets, text, **options: notifications.append((text, options)),
+    )
+
+    assert dispatcher.dispatchNextGoogleAction(
+        {"SAGE_TELEGRAM_NOTIFICATIONS_TOPIC_ID": "12"}, actionRepository
+    )
+    assert actionRepository.completed == [("action-2", "event-1")]
+    assert "Created Calendar event" in notifications[0][0]
 
 
 def testFormatsVerifiedResearchLinksWithoutModelRewriting():

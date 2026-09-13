@@ -11,6 +11,8 @@ def testSagePromptEncodesAuthorityAndResearchBoundaries():
     assert "You are Sage" in prompt
     assert "Never claim" in prompt
     assert "explicit user approval" in prompt
+    assert "Calendar event creation and updates require explicit" in prompt
+    assert "Deleting a Calendar event always requires" in prompt
     assert "Gmail access is connected" in prompt
     assert "untrusted evidence" in prompt
     assert "Do not reveal" in prompt
