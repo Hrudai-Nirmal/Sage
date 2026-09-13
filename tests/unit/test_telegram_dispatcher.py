@@ -740,11 +740,20 @@ def testGmailSendAlwaysCreatesApprovalInsteadOfCallingGoogle(monkeypatch):
         "Send this email to person@example.com now",
         "msg-4",
     )
+    contextualMismatchResult = dispatcher.executeSageTool(
+        {},
+        "send_gmail_message",
+        '{"accountKey":"work","to":["typo@example.com"],"subject":"Hello","body":"Hi"}',
+        "It is person@example.com; request the approval again",
+        "msg-5",
+        hasExplicitGmailProposalIntent=True,
+    )
 
     assert draftOnlyResult["status"] == "NEEDS_EXPLICIT_REQUEST"
     assert toolResult["status"] == "PENDING_APPROVAL"
     assert mismatchedRecipientResult["status"] == "REJECTED"
     assert mismatchedRecipientResult["error"] == "The proposed recipients differ from the request."
+    assert contextualMismatchResult["status"] == "REJECTED"
     assert proposals[0][0] == "SEND_GMAIL_MESSAGE"
     assert len(proposals) == 1
 
@@ -825,6 +834,42 @@ def testConfirmedEmailDraftForcesTrustedApprovalProposal(monkeypatch):
     }
     assert len(modelPayloads) == 1
     assert executedTools == [("send_gmail_message", True)]
+
+
+def testGmailDraftConfirmationAcceptsNaturalLanguageButRejectsHesitation():
+    """Approval-card intent should be conversational without treating uncertainty as consent."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramNaturalApproval", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    conversation = [
+        {"role": "user", "content": "Draft an email to friend@example.com."},
+        {
+            "role": "assistant",
+            "content": "**To:** friend@example.com\n**Subject:** Dinner\n\nDinner at 8?",
+        },
+        {"role": "user", "content": "I did not see an approval card."},
+        {
+            "role": "assistant",
+            "content": "I can request the email approval buttons again when you are ready.",
+        },
+    ]
+
+    for naturalConfirmation in (
+        "Sure, that looks good",
+        "Okay, please do it",
+        "Yep 👍",
+        "All good, go for it",
+        "Works for me",
+        "Perfect",
+        "Please send",
+        "Can you show the approval buttons again?",
+        "Re-request approval for that",
+    ):
+        assert dispatcher.hasConfirmedGmailDraft(conversation, naturalConfirmation)
+    for hesitantReply in ("Not yet", "Maybe later", "Wait, change the time first"):
+        assert not dispatcher.hasConfirmedGmailDraft(conversation, hesitantReply)
 
 
 def testGoogleActionWorkerStagesGmailDraftBeforeSending(monkeypatch):

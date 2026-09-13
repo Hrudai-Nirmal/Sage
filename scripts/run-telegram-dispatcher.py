@@ -515,6 +515,17 @@ def executeSageTool(
                 flags=re.IGNORECASE,
             )
         }
+        mentionedEmails = re.findall(
+            r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+            userMessage,
+            flags=re.IGNORECASE,
+        )
+        if (
+            hasExplicitGmailProposalIntent
+            and not explicitRecipients
+            and len(mentionedEmails) == 1
+        ):
+            explicitRecipients = {mentionedEmails[0].casefold()}
         proposedRecipients = {
             str(recipient).casefold() for recipient in arguments["to"]
         }
@@ -682,7 +693,7 @@ def getPreviousUserMessage(messageId: int) -> str | None:
     return str(previousRow[0]) if previousRow else None
 
 
-def getRecentConversation(messageId: int, currentMessage: str, historyLimit: int = 4) -> list[dict[str, str]]:
+def getRecentConversation(messageId: int, currentMessage: str, historyLimit: int = 8) -> list[dict[str, str]]:
     """Build compact chronological model context from completed Telegram turns."""
     with sqlite3.connect(DATABASE_PATH) as connection:
         previousRows = connection.execute(
@@ -1068,9 +1079,7 @@ def hasConfirmedGmailDraft(
         r"\b(?:e-?mail|mail|send)\b", assistantDrafts[-1], flags=re.IGNORECASE
     ) is None:
         return False
-    normalizedDrafts = [
-        re.sub(r"[*_`]", "", assistantDraft) for assistantDraft in assistantDrafts[-2:]
-    ]
+    normalizedDrafts = [re.sub(r"[*_`]", "", assistantDraft) for assistantDraft in assistantDrafts]
     hasCompleteDraft = any(
         re.search(r"(?im)^\s*to:\s*\S+@\S+", normalizedDraft)
         and re.search(r"(?im)^\s*subject:\s*\S+", normalizedDraft)
@@ -1079,22 +1088,36 @@ def hasConfirmedGmailDraft(
     if not hasCompleteDraft:
         return False
     normalizedMessage = userMessage.strip()
-    isAffirmative = re.fullmatch(
-        r"(?:yes(?:\s+please)?|confirm(?:ed)?|go\s+ahead|do\s+it|proceed)[.!\s]*",
+    hasHesitationOrCorrection = re.search(
+        r"\b(?:no|not|don['’]?t|do\s+not|wait|hold|stop|cancel|maybe|later|"
+        r"change|edit|wrong|unsure)\b",
+        normalizedMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    if hasHesitationOrCorrection:
+        return False
+    isAffirmative = re.match(
+        r"^(?:yes|yep|yeah|yup|sure|ok(?:ay)?|absolutely|definitely|confirm(?:ed)?|"
+        r"agreed|all\s+good|looks\s+good|sounds\s+good|that(?:['’]s|\s+is)\s+fine|"
+        r"that\s+works|works\s+for\s+me|fine(?:\s+by\s+me)?|perfect|approv(?:e|ed))\b",
         normalizedMessage,
         flags=re.IGNORECASE,
     ) is not None
     requestsApproval = re.search(
-        r"\b(?:approv(?:al|e|ing)|confirmation\s+button)\b",
+        r"\b(?:show|request|re-?request|get|open|create|send|bring)\b.*"
+        r"\b(?:approv(?:al|e|ing)|confirmation)\b|"
+        r"\b(?:approv(?:al|e|ing)|confirmation)\b.*\b(?:again|button|card)\b",
         normalizedMessage,
         flags=re.IGNORECASE,
     ) is not None
-    requestsSend = re.search(
-        r"\bsend\b.*\b(?:it|this|e-?mail|mail|message)\b",
+    requestsAction = re.search(
+        r"\b(?:please\s+do(?:\s+(?:it|that))?|go\s+ahead|go\s+for\s+it|"
+        r"do\s+(?:it|that)|proceed|make\s+it\s+happen|send(?:\s+(?:it|this|"
+        r"the\s+e-?mail|the\s+mail|the\s+message))?)\b",
         normalizedMessage,
         flags=re.IGNORECASE,
     ) is not None
-    return isAffirmative or requestsApproval or requestsSend
+    return isAffirmative or requestsApproval or requestsAction
 
 
 def runToolAwareConversation(
