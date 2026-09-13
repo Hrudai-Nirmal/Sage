@@ -233,6 +233,20 @@ class SageDatabase:
                     FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS email_drafts (
+                    draft_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    account_key TEXT NOT NULL,
+                    recipients_json TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    approval_request_id TEXT UNIQUE,
+                    idempotency_key TEXT,
+                    PRIMARY KEY (draft_id, version)
+                );
+
                 CREATE TABLE IF NOT EXISTS telegram_messages (
                     message_id INTEGER PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -262,9 +276,14 @@ class SageDatabase:
             self._addTelegramColumnIfMissing(connection, "reply_text", "TEXT")
             self._addTelegramColumnIfMissing(connection, "attachment_json", "TEXT")
             self._addApprovalColumnIfMissing(connection, "idempotency_key", "TEXT")
+            self._addEmailDraftColumnIfMissing(connection, "idempotency_key", "TEXT")
             connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS approval_requests_idempotency_key
                    ON approval_requests(idempotency_key) WHERE idempotency_key IS NOT NULL"""
+            )
+            connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS email_drafts_idempotency_key
+                   ON email_drafts(idempotency_key) WHERE idempotency_key IS NOT NULL"""
             )
 
     def _addTaskColumnIfMissing(
@@ -300,4 +319,17 @@ class SageDatabase:
         if columnName not in approvalColumns:
             connection.execute(
                 f"ALTER TABLE approval_requests ADD COLUMN {columnName} {columnDefinition}"
+            )
+
+    def _addEmailDraftColumnIfMissing(
+        self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
+    ) -> None:
+        """Add replay protection without discarding previously saved draft history."""
+        draftColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute("PRAGMA table_info(email_drafts)").fetchall()
+        }
+        if columnName not in draftColumns:
+            connection.execute(
+                f"ALTER TABLE email_drafts ADD COLUMN {columnName} {columnDefinition}"
             )

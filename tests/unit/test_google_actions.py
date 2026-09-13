@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
+from sage_core.email_draft_state import EmailDraftStateRepository
 from sage_core.google_action_state import GoogleActionRepository
 
 
@@ -75,11 +76,50 @@ def testApprovedGmailSendBecomesAStagedOutboxAction(tmp_path):
     assert action["actionType"] == "SEND_GMAIL_MESSAGE"
     assert action["stage"] == "CREATE_DRAFT"
     assert action["payload"]["to"] == ["recipient@example.com"]
+    draftRepository = EmailDraftStateRepository(database)
+    assert draftRepository.listDrafts()[0]["status"] == "SENDING"
     actionRepository.stageGmailDraft(action["id"], "draft-123")
     stagedAction = actionRepository.claimPendingAction()
     assert stagedAction is not None
     assert stagedAction["stage"] == "SEND_DRAFT"
     assert stagedAction["remoteId"] == "draft-123"
+    actionRepository.completeAction(stagedAction["id"], "message-123")
+    assert draftRepository.listDrafts()[0]["status"] == "SENT"
+
+
+def testGmailFailureAndQuarantineAreVisibleOnTheBoundDraft(tmp_path):
+    """Draft status must expose retry failures and safety quarantine to the operator."""
+    database = SageDatabase(tmp_path / "sage.db")
+    approvalRepository = ApprovalStateRepository(database)
+    actionRepository = GoogleActionRepository(database)
+    draftRepository = EmailDraftStateRepository(database)
+    proposal = approvalRepository.createProposal(
+        "SEND_GMAIL_MESSAGE",
+        {
+            "accountKey": "work",
+            "to": ["recipient@example.com"],
+            "subject": "Status check",
+            "body": "Please confirm receipt.",
+        },
+    )
+    approvalRepository.confirmProposal(proposal["id"], "telegram:8961856168")
+    claimedAction = actionRepository.claimPendingAction()
+    assert claimedAction is not None
+
+    actionRepository.failAction(
+        str(claimedAction["id"]), "TimeoutError", datetime(2026, 9, 14, tzinfo=UTC)
+    )
+    assert draftRepository.listDrafts()[0]["status"] == "FAILED"
+
+    retryAction = actionRepository.claimPendingAction(
+        datetime(2026, 9, 14, tzinfo=UTC) + timedelta(minutes=3)
+    )
+    assert retryAction is not None
+    actionRepository.failAction(
+        str(retryAction["id"]), "InvalidRecipient", datetime(2026, 9, 14, tzinfo=UTC)
+    )
+    actionRepository.quarantinePendingAction(str(retryAction["id"]), "RECIPIENT_MISMATCH")
+    assert draftRepository.listDrafts()[0]["status"] == "QUARANTINED"
 
 
 def testSensitiveProposalIsIdempotentForOneTelegramMessage(tmp_path):

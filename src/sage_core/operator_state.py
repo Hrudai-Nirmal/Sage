@@ -26,6 +26,7 @@ class OperatorStateRepository:
             "calendarReminders": "SELECT COUNT(*) FROM calendar_reminders WHERE status = 'PENDING'",
             "documents": "SELECT COUNT(*) FROM documents",
             "driveFiles": "SELECT COUNT(*) FROM drive_files",
+            "emailDrafts": "SELECT COUNT(*) FROM email_drafts WHERE status NOT IN ('SENT', 'CANCELLED', 'SUPERSEDED')",
             "emails": "SELECT COUNT(*) FROM email_messages",
             "emailTriage": "SELECT COUNT(*) FROM email_triage_jobs WHERE status = 'PENDING'",
             "googleActions": "SELECT COUNT(*) FROM google_actions WHERE status != 'COMPLETE'",
@@ -59,6 +60,10 @@ class OperatorStateRepository:
             emailRows = connection.execute(
                 """SELECT account_key, sender, subject, internal_date
                    FROM email_messages ORDER BY CAST(internal_date AS INTEGER) DESC LIMIT 20"""
+            ).fetchall()
+            emailDraftRows = connection.execute(
+                """SELECT draft_id, version, account_key, recipients_json, subject, status
+                   FROM email_drafts ORDER BY created_at DESC, version DESC LIMIT 20"""
             ).fetchall()
             triageRows = connection.execute(
                 """SELECT account_key, message_id, status, attempts FROM email_triage_jobs
@@ -134,6 +139,18 @@ class OperatorStateRepository:
             "emails": [
                 {"accountKey": accountKey, "internalDate": internalDate, "sender": sender, "subject": subject}
                 for accountKey, sender, subject, internalDate in emailRows
+            ],
+            "emailDrafts": [
+                {
+                    "accountKey": accountKey,
+                    "id": draftId,
+                    "status": draftStatus,
+                    "subject": subject,
+                    "to": ", ".join(json.loads(recipientsJson)),
+                    "version": version,
+                }
+                for draftId, version, accountKey, recipientsJson, subject, draftStatus
+                in emailDraftRows
             ],
             "emailTriage": [
                 {"accountKey": accountKey, "attempts": attempts, "messageId": messageId, "status": triageStatus}

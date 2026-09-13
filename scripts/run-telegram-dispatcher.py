@@ -40,8 +40,11 @@ MUTATION_TOOL_NAMES = {
     "create_drive_folder",
     "delete_calendar_event",
     "delete_drive_file",
+    "draft_gmail_message",
     "import_download_file",
     "rename_drive_file",
+    "request_gmail_approval",
+    "revise_gmail_draft",
     "send_gmail_message",
     "update_calendar_event",
 }
@@ -498,6 +501,71 @@ def executeSageTool(
             "source": "sage-document-registry",
             "document": importDownloadFile(secrets, str(arguments["relativePath"])),
         }
+
+    if toolName == "draft_gmail_message":
+        if re.search(r"\b(?:draft|write|compose|prepare)\b", userMessage, re.IGNORECASE) is None:
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not explicitly request an email draft.",
+            }
+        draft = postJson(
+            f"{CORE_URL}/v1/email-drafts",
+            {
+                **arguments,
+                **({"idempotencyKey": f"{requestKey}:DRAFT_GMAIL_MESSAGE"} if requestKey else {}),
+            },
+            {
+                "Content-Type": "application/json",
+                "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
+            },
+        )
+        return {"status": "DRAFTED", "draft": draft}
+
+    if toolName == "revise_gmail_draft":
+        if re.search(
+            r"\b(?:change|edit|revise|rewrite|update|correct|replace|add|remove)\b",
+            userMessage,
+            re.IGNORECASE,
+        ) is None:
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not explicitly request a draft revision.",
+            }
+        draftId = str(arguments.pop("draftId"))
+        revisedDraft = postJson(
+            f"{CORE_URL}/v1/email-drafts/{draftId}/versions",
+            {
+                **arguments,
+                **({"idempotencyKey": f"{requestKey}:REVISE_GMAIL_DRAFT"} if requestKey else {}),
+            },
+            {
+                "Content-Type": "application/json",
+                "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
+            },
+        )
+        return {"status": "DRAFTED", "draft": revisedDraft}
+
+    if toolName == "request_gmail_approval":
+        if not hasExplicitGmailProposalIntent and re.search(
+            r"\b(?:send|approve|approval|confirm)\b", userMessage, re.IGNORECASE
+        ) is None:
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not request approval for this email draft.",
+            }
+        recipientLabel = ", ".join(str(recipient) for recipient in arguments["to"])
+        approvalText = sendApprovalRequest(
+            secrets,
+            "SEND_GMAIL_MESSAGE",
+            arguments,
+            (
+                f"Send Gmail draft {arguments['draftId']} v{arguments['draftVersion']} "
+                f"from [{arguments['accountKey']}]\nTo: {recipientLabel}\n"
+                f"Subject: {arguments['subject']}\n\n{arguments['body']}"
+            ),
+            f"{requestKey}:SEND_GMAIL_MESSAGE" if requestKey else "",
+        )
+        return {"status": "PENDING_APPROVAL", "result": approvalText}
 
     if toolName == "send_gmail_message":
         if not hasExplicitGmailProposalIntent and not re.search(
@@ -1066,6 +1134,44 @@ def getPendingApprovalReply(toolResults: list[dict[str, object]]) -> str | None:
     return None
 
 
+def getDraftedReply(toolResults: list[dict[str, object]]) -> str | None:
+    """Return a stable draft receipt that later turns can safely reference by version."""
+    for toolResult in toolResults:
+        if toolResult.get("status") != "DRAFTED":
+            continue
+        draft = toolResult.get("draft")
+        if not isinstance(draft, dict):
+            raise RuntimeError("Email draft tool returned no draft")
+        recipients = draft.get("to")
+        if not isinstance(recipients, list):
+            raise RuntimeError("Email draft tool returned invalid recipients")
+        return (
+            "Draft saved. Nothing has been sent.\n\n"
+            f"Draft ID: {draft['id']}\nVersion: {draft['version']}\n"
+            f"Account: {draft['accountKey']}\nTo: {', '.join(str(item) for item in recipients)}\n"
+            f"Subject: {draft['subject']}\n\n{draft['body']}"
+        )
+    return None
+
+
+def getSavedDraftIdentity(
+    conversation: list[dict[str, object]],
+) -> tuple[str, int] | None:
+    """Read the latest deterministic draft identity from assistant-visible history."""
+    for message in reversed(conversation):
+        if message.get("role") != "assistant":
+            continue
+        content = str(message.get("content", ""))
+        identityMatch = re.search(
+            r"(?im)^Draft ID:\s*([^\s]+)\s*$.*?^Version:\s*(\d+)\s*$",
+            content,
+            flags=re.DOTALL,
+        )
+        if identityMatch:
+            return identityMatch.group(1), int(identityMatch.group(2))
+    return None
+
+
 def hasConfirmedGmailDraft(
     conversation: list[dict[str, object]], userMessage: str
 ) -> bool:
@@ -1075,9 +1181,12 @@ def hasConfirmedGmailDraft(
         for message in conversation
         if message.get("role") == "assistant"
     ]
-    if not assistantDrafts or re.search(
-        r"\b(?:e-?mail|mail|send)\b", assistantDrafts[-1], flags=re.IGNORECASE
-    ) is None:
+    if not assistantDrafts or (
+        re.search(
+            r"\b(?:e-?mail|mail|send)\b", assistantDrafts[-1], flags=re.IGNORECASE
+        ) is None
+        and getSavedDraftIdentity(conversation) is None
+    ):
         return False
     normalizedDrafts = [re.sub(r"[*_`]", "", assistantDraft) for assistantDraft in assistantDrafts]
     hasCompleteDraft = any(
@@ -1138,9 +1247,14 @@ def runToolAwareConversation(
     hasExplicitGmailProposalIntent = hasConfirmedGmailDraft(conversation, userMessage)
     initialToolChoice: str | dict[str, object] = "auto"
     if hasExplicitGmailProposalIntent:
+        gmailToolName = (
+            "request_gmail_approval"
+            if getSavedDraftIdentity(conversation) is not None
+            else "send_gmail_message"
+        )
         initialToolChoice = {
             "type": "function",
-            "function": {"name": "send_gmail_message"},
+            "function": {"name": gmailToolName},
         }
     initialResponse = postJson(
         MODEL_URL,
@@ -1179,6 +1293,9 @@ def runToolAwareConversation(
     pendingApprovalReply = getPendingApprovalReply(toolResults)
     if pendingApprovalReply is not None:
         return pendingApprovalReply
+    draftedReply = getDraftedReply(toolResults)
+    if draftedReply is not None:
+        return draftedReply
 
     finalResponse = postJson(
         MODEL_URL,
@@ -1212,6 +1329,9 @@ def runToolAwareConversation(
         pendingApprovalReply = getPendingApprovalReply(followupToolResults)
         if pendingApprovalReply is not None:
             return pendingApprovalReply
+        draftedReply = getDraftedReply(followupToolResults)
+        if draftedReply is not None:
+            return draftedReply
         finalResponse = postJson(
             MODEL_URL,
             {

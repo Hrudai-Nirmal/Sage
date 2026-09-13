@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from sage_core.audit_state import AuditStateRepository
 from sage_core.database import SageDatabase
+from sage_core.email_draft_state import EmailDraftStateRepository
 
 
 class ApprovalStateRepository:
@@ -17,6 +18,7 @@ class ApprovalStateRepository:
         """Use the shared Sage database for approval and task state."""
         self.database = database
         self.auditStateRepository = AuditStateRepository(database)
+        self.emailDraftStateRepository = EmailDraftStateRepository(database)
 
     def createProposal(
         self,
@@ -29,6 +31,17 @@ class ApprovalStateRepository:
         createdAt = datetime.now(UTC)
         expiresAt = createdAt + timedelta(hours=24)
         with self.database.connectDatabase() as connection:
+            if idempotencyKey:
+                existingRow = connection.execute(
+                    "SELECT id, status FROM approval_requests WHERE idempotency_key = ?",
+                    (idempotencyKey,),
+                ).fetchone()
+                if existingRow is not None:
+                    return {"id": str(existingRow[0]), "status": str(existingRow[1])}
+            if actionType == "SEND_GMAIL_MESSAGE":
+                payload = self.emailDraftStateRepository.createApprovalSnapshot(
+                    connection, payload, approvalId
+                )
             insertResult = connection.execute(
                 """
                 INSERT OR IGNORE INTO approval_requests (
@@ -94,6 +107,13 @@ class ApprovalStateRepository:
                 raise TimeoutError("Approval request has expired")
 
             taskPayload = json.loads(payloadJson)
+            if actionType == "SEND_GMAIL_MESSAGE":
+                self.emailDraftStateRepository.markApproved(
+                    connection,
+                    str(taskPayload["draftId"]),
+                    int(taskPayload["draftVersion"]),
+                    approvalId,
+                )
             connection.execute(
                 """
                 UPDATE approval_requests
@@ -218,6 +238,8 @@ class ApprovalStateRepository:
                 "UPDATE approval_requests SET status = 'DECLINED', approved_by = ? WHERE id = ? AND status = 'PENDING'",
                 (declinedBy, approvalId),
             )
+            if actionType == "SEND_GMAIL_MESSAGE":
+                self.emailDraftStateRepository.markCancelled(connection, approvalId)
             self.auditStateRepository.recordEvent(
                 actionType=actionType,
                 actor=declinedBy,

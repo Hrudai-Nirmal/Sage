@@ -1,6 +1,7 @@
 """Unit tests for Sage's native Telegram dispatcher failure boundaries."""
 
 from importlib.util import module_from_spec, spec_from_file_location
+import json
 from pathlib import Path
 import sqlite3
 from urllib.error import HTTPError
@@ -756,6 +757,103 @@ def testGmailSendAlwaysCreatesApprovalInsteadOfCallingGoogle(monkeypatch):
     assert contextualMismatchResult["status"] == "REJECTED"
     assert proposals[0][0] == "SEND_GMAIL_MESSAGE"
     assert len(proposals) == 1
+
+
+def testEmailDraftToolsPersistReviseAndRequestExactApproval(monkeypatch):
+    """Telegram drafting stays reversible until the exact saved version gets a card."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramEmailDrafts", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    coreCalls = []
+    proposals = []
+
+    def fakePostJson(url, payload, headers):
+        coreCalls.append((url, payload))
+        return {
+            **{key: value for key, value in payload.items() if key != "expectedVersion"},
+            "id": "draft-1",
+            "version": 2 if url.endswith("/versions") else 1,
+            "status": "DRAFT",
+        }
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(
+        dispatcher,
+        "sendApprovalRequest",
+        lambda secrets, actionType, payload, label, idempotencyKey="": proposals.append(
+            (actionType, payload, label, idempotencyKey)
+        ) or "Approval card sent.",
+    )
+    message = {
+        "accountKey": "work",
+        "to": ["person@example.com"],
+        "subject": "Hello",
+        "body": "Hi",
+    }
+
+    drafted = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "token"},
+        "draft_gmail_message",
+        json.dumps(message),
+        "Draft an email to person@example.com",
+        "msg-10",
+    )
+    revised = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "token"},
+        "revise_gmail_draft",
+        json.dumps({**message, "draftId": "draft-1", "expectedVersion": 1, "body": "Hello"}),
+        "Change the body to Hello",
+        "msg-11",
+    )
+    requested = dispatcher.executeSageTool(
+        {},
+        "request_gmail_approval",
+        json.dumps({**message, "draftId": "draft-1", "draftVersion": 2, "body": "Hello"}),
+        "Looks good, please send it",
+        "msg-12",
+        hasExplicitGmailProposalIntent=True,
+    )
+
+    assert drafted["status"] == "DRAFTED"
+    assert revised["draft"]["version"] == 2
+    assert requested["status"] == "PENDING_APPROVAL"
+    assert coreCalls[0][0].endswith("/v1/email-drafts")
+    assert coreCalls[1][0].endswith("/v1/email-drafts/draft-1/versions")
+    assert proposals[0][1]["draftVersion"] == 2
+
+
+def testSavedDraftReplyCarriesIdentityAndNaturalConfirmationReusesIt():
+    """A later confirmation should target the saved version instead of creating a duplicate."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramSavedDraft", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    reply = dispatcher.getDraftedReply(
+        [{
+            "status": "DRAFTED",
+            "draft": {
+                "id": "draft-1",
+                "version": 2,
+                "accountKey": "work",
+                "to": ["person@example.com"],
+                "subject": "Hello",
+                "body": "Updated body",
+            },
+        }]
+    )
+
+    assert reply is not None
+    assert "Draft ID: draft-1" in reply
+    assert "Version: 2" in reply
+    assert dispatcher.getSavedDraftIdentity(
+        [{"role": "assistant", "content": reply}]
+    ) == ("draft-1", 2)
+    assert dispatcher.hasConfirmedGmailDraft(
+        [{"role": "assistant", "content": reply}], "Sure, looks good"
+    )
 
 
 def testConfirmedEmailDraftForcesTrustedApprovalProposal(monkeypatch):

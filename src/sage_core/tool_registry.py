@@ -102,6 +102,72 @@ def getToolDefinitions() -> list[dict[str, object]]:
         {
             "type": "function",
             "function": {
+                "name": "draft_gmail_message",
+                "description": (
+                    "Save a complete versioned Gmail draft without requesting approval or sending. "
+                    "Use when the user asks to draft, write, or compose an email for review."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "accountKey": accountSchema,
+                        "to": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "email"},
+                            "minItems": 1,
+                            "maxItems": 20,
+                        },
+                        "subject": {"type": "string", "maxLength": 2000},
+                        "body": {"type": "string", "minLength": 1, "maxLength": 50000},
+                    },
+                    ["accountKey", "to", "subject", "body"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "revise_gmail_draft",
+                "description": (
+                    "Append a new immutable version of a saved Gmail draft after an explicit user "
+                    "edit. Supply the complete revised message, not only changed fields."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "draftId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "expectedVersion": {"type": "integer", "minimum": 1},
+                        "accountKey": accountSchema,
+                        "to": {"type": "array", "items": {"type": "string", "format": "email"}, "minItems": 1, "maxItems": 20},
+                        "subject": {"type": "string", "maxLength": 2000},
+                        "body": {"type": "string", "minLength": 1, "maxLength": 50000},
+                    },
+                    ["draftId", "expectedVersion", "accountKey", "to", "subject", "body"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "request_gmail_approval",
+                "description": (
+                    "Request Telegram approval for one exact saved Gmail draft version after the "
+                    "user confirms it should be sent. Supply the complete unchanged snapshot."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "draftId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "draftVersion": {"type": "integer", "minimum": 1},
+                        "accountKey": accountSchema,
+                        "to": {"type": "array", "items": {"type": "string", "format": "email"}, "minItems": 1, "maxItems": 20},
+                        "subject": {"type": "string", "maxLength": 2000},
+                        "body": {"type": "string", "minLength": 1, "maxLength": 50000},
+                    },
+                    ["draftId", "draftVersion", "accountKey", "to", "subject", "body"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "send_gmail_message",
                 "description": (
                     "Prepare an email for independent user approval. This never sends directly; "
@@ -271,8 +337,18 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
             raise ValueError("Download import requires a safe relative path")
         return {"relativePath": relativePath.strip()}
 
-    if toolName == "send_gmail_message":
-        _rejectUnknownKeys(arguments, {"accountKey", "to", "subject", "body"})
+    if toolName in {
+        "draft_gmail_message",
+        "request_gmail_approval",
+        "revise_gmail_draft",
+        "send_gmail_message",
+    }:
+        identityKeys: set[str] = set()
+        if toolName == "revise_gmail_draft":
+            identityKeys = {"draftId", "expectedVersion"}
+        elif toolName == "request_gmail_approval":
+            identityKeys = {"draftId", "draftVersion"}
+        _rejectUnknownKeys(arguments, {"accountKey", "to", "subject", "body"} | identityKeys)
         if arguments.get("accountKey") not in ACCOUNT_KEYS:
             raise ValueError("Gmail account is not configured")
         recipients = arguments.get("to")
@@ -292,12 +368,23 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
             raise ValueError("Gmail subject must be one header-safe line of at most 2000 characters")
         if not isinstance(body, str) or not body.strip() or len(body) > 50_000:
             raise ValueError("Gmail body must be between 1 and 50000 characters")
-        return {
+        validatedMessage: dict[str, object] = {
             "accountKey": str(arguments["accountKey"]),
             "to": recipients,
             "subject": subject.strip(),
             "body": body,
         }
+        if identityKeys:
+            draftId = arguments.get("draftId")
+            versionKey = "expectedVersion" if toolName == "revise_gmail_draft" else "draftVersion"
+            draftVersion = arguments.get(versionKey)
+            if not isinstance(draftId, str) or not draftId.strip() or len(draftId) > 100:
+                raise ValueError("Email draft ID is invalid")
+            if not isinstance(draftVersion, int) or draftVersion < 1:
+                raise ValueError("Email draft version is invalid")
+            validatedMessage["draftId"] = draftId.strip()
+            validatedMessage[versionKey] = draftVersion
+        return validatedMessage
 
     if toolName in {
         "create_calendar_event",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import json
+import sqlite3
 from uuid import uuid4
 
 from sage_core.audit_state import AuditStateRepository
@@ -99,6 +100,8 @@ class GoogleActionRepository:
                 "UPDATE google_actions SET status = 'PROCESSING' WHERE id = ?",
                 (actionRow[0],),
             )
+            if str(actionRow[1]) == "SEND_GMAIL_MESSAGE":
+                self._updateBoundEmailDraftStatus(connection, str(actionRow[3]), "SENDING")
         return {
             "id": str(actionRow[0]),
             "actionType": str(actionRow[1]),
@@ -131,7 +134,8 @@ class GoogleActionRepository:
         completionTime = completedAt or datetime.now(UTC)
         with self.database.connectDatabase() as connection:
             actionRow = connection.execute(
-                "SELECT action_type FROM google_actions WHERE id = ? AND status = 'PROCESSING'",
+                """SELECT action_type, payload_json FROM google_actions
+                   WHERE id = ? AND status = 'PROCESSING'""",
                 (actionId,),
             ).fetchone()
             if actionRow is None:
@@ -142,6 +146,8 @@ class GoogleActionRepository:
                    WHERE id = ? AND status = 'PROCESSING'""",
                 (completionTime.isoformat(), remoteId, remoteId, actionId),
             )
+            if str(actionRow[0]) == "SEND_GMAIL_MESSAGE":
+                self._updateBoundEmailDraftStatus(connection, str(actionRow[1]), "SENT")
             self.auditStateRepository.recordEvent(
                 connection=connection,
                 actor="sage:google-action-worker",
@@ -159,7 +165,8 @@ class GoogleActionRepository:
         failureTime = failedAt or datetime.now(UTC)
         with self.database.connectDatabase() as connection:
             attemptsRow = connection.execute(
-                "SELECT attempts FROM google_actions WHERE id = ? AND status = 'PROCESSING'",
+                """SELECT attempts, action_type, payload_json FROM google_actions
+                   WHERE id = ? AND status = 'PROCESSING'""",
                 (actionId,),
             ).fetchone()
             if attemptsRow is None:
@@ -171,6 +178,8 @@ class GoogleActionRepository:
                           next_attempt_at = ?, error_type = ? WHERE id = ?""",
                 (attempts, retryAt.isoformat(), errorType[:200], actionId),
             )
+            if str(attemptsRow[1]) == "SEND_GMAIL_MESSAGE":
+                self._updateBoundEmailDraftStatus(connection, str(attemptsRow[2]), "FAILED")
 
     def quarantinePendingAction(self, actionId: str, reasonCode: str) -> None:
         """Keep a known-invalid action for audit while making it ineligible for delivery."""
@@ -181,7 +190,8 @@ class GoogleActionRepository:
         normalizedReason = reasonCode.strip()[:200]
         with self.database.connectDatabase() as connection:
             actionRow = connection.execute(
-                "SELECT action_type FROM google_actions WHERE id = ? AND status = 'PENDING'",
+                """SELECT action_type, payload_json FROM google_actions
+                   WHERE id = ? AND status = 'PENDING'""",
                 (actionId.strip(),),
             ).fetchone()
             if actionRow is None:
@@ -190,6 +200,10 @@ class GoogleActionRepository:
                 "UPDATE google_actions SET status = 'QUARANTINED', error_type = ? WHERE id = ?",
                 (normalizedReason, actionId.strip()),
             )
+            if str(actionRow[0]) == "SEND_GMAIL_MESSAGE":
+                self._updateBoundEmailDraftStatus(
+                    connection, str(actionRow[1]), "QUARANTINED"
+                )
             self.auditStateRepository.recordEvent(
                 connection=connection,
                 actor="sage:safety-guard",
@@ -206,3 +220,17 @@ class GoogleActionRepository:
             connection.execute(
                 "UPDATE google_actions SET status = 'PENDING' WHERE status = 'PROCESSING'"
             )
+
+    def _updateBoundEmailDraftStatus(
+        self, connection: sqlite3.Connection, payloadJson: str, draftStatus: str
+    ) -> None:
+        """Mirror outbox progress only when the action carries a durable draft identity."""
+        payload = json.loads(payloadJson)
+        draftId = payload.get("draftId")
+        draftVersion = payload.get("draftVersion")
+        if not isinstance(draftId, str) or not isinstance(draftVersion, int):
+            return
+        connection.execute(
+            "UPDATE email_drafts SET status = ? WHERE draft_id = ? AND version = ?",
+            (draftStatus, draftId, draftVersion),
+        )

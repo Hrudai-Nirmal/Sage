@@ -72,6 +72,7 @@ The slash commands are deterministic shortcuts, not the only interface. Ordinary
 Ordinary chat also supports explicit Google actions with complete details:
 
 - Gmail sending is available from any configured account, but every message is shown in a one-time Telegram approval card. Approval creates a durable two-stage outbox job: first a Gmail draft is created, its remote ID is saved, and only then is that exact draft sent.
+- Email composition is versioned locally before sending: revisions are immutable, old approval cards are superseded, and every approval is tied to one exact draft version. Active draft status is visible in Sage Operator.
 - Calendar creation and updates are queued only for the personal-work account when the event target and timezone-aware times are explicit. Sage never guesses missing event details.
 - Calendar deletion always creates a one-time Telegram approval card. Approved Calendar operations use a durable retry queue, and creates use a stable Google event ID so retries do not duplicate the event.
 - The local operator dashboard shows pending Google outbox stages and retry counts without exposing email bodies.

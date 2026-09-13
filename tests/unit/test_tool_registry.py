@@ -16,7 +16,10 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "create_drive_folder",
         "delete_calendar_event",
         "delete_drive_file",
+        "draft_gmail_message",
         "rename_drive_file",
+        "request_gmail_approval",
+        "revise_gmail_draft",
         "import_download_file",
         "search_calendar",
         "search_documents",
@@ -72,6 +75,16 @@ def testValidatesGmailSendAndCalendarMutationArguments():
         "subject": "Hello",
         "body": "Hi",
     }
+    assert validateToolArguments(
+        "revise_gmail_draft",
+        '{"draftId":"draft-1","expectedVersion":2,"accountKey":"work",'
+        '"to":["person@example.com"],"subject":"Hello again","body":"Updated"}',
+    )["expectedVersion"] == 2
+    assert validateToolArguments(
+        "request_gmail_approval",
+        '{"draftId":"draft-1","draftVersion":2,"accountKey":"work",'
+        '"to":["person@example.com"],"subject":"Hello again","body":"Updated"}',
+    )["draftId"] == "draft-1"
     assert validateToolArguments(
         "create_calendar_event",
         '{"summary":"Interview","startAt":"2026-09-15T10:00:00+05:30",'

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.database import SageDatabase
 from sage_core.document_state import DocumentStateRepository
+from sage_core.email_draft_state import EmailDraftStateRepository
 from sage_core.google_state import GoogleStateRepository
 from sage_core.online_research import OnlineResearchService
 from sage_core.operator_state import OperatorStateRepository
@@ -100,6 +101,8 @@ class GmailSendProposalPayload(BaseModel):
 
     accountKey: Literal["personal-work", "work", "personal", "college"]
     body: str = Field(min_length=1, max_length=50_000)
+    draftId: str | None = Field(default=None, min_length=1, max_length=100)
+    draftVersion: int | None = Field(default=None, ge=1)
     subject: str = Field(max_length=2_000)
     to: list[str] = Field(min_length=1, max_length=20)
 
@@ -114,6 +117,34 @@ class GmailSendProposalPayload(BaseModel):
         if "\r" in self.subject or "\n" in self.subject:
             raise ValueError("Gmail subject must be one header-safe line")
         return self
+
+
+class EmailDraftCreatePayload(BaseModel):
+    """Validate complete content saved as the first immutable email draft version."""
+
+    accountKey: Literal["personal-work", "work", "personal", "college"]
+    body: str = Field(min_length=1, max_length=50_000)
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    subject: str = Field(max_length=2_000)
+    to: list[str] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validateMessage(self) -> "EmailDraftCreatePayload":
+        """Apply the same recipient and header constraints as an approval snapshot."""
+        GmailSendProposalPayload(**self.model_dump())
+        return self
+
+
+class EmailDraftRevisionPayload(EmailDraftCreatePayload):
+    """Require optimistic concurrency before appending a revised draft version."""
+
+    expectedVersion: int = Field(ge=1)
+
+
+class EmailDraftApprovalPayload(BaseModel):
+    """Deduplicate a request to approve one exact draft version."""
+
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class GmailSendApprovalRequestPayload(BaseModel):
@@ -284,6 +315,7 @@ def createApp(
     managedDataRoot = dataRoot or databasePath.parent.parent
     database = SageDatabase(databasePath)
     approvalStateRepository = ApprovalStateRepository(database)
+    emailDraftStateRepository = EmailDraftStateRepository(database)
     documentStateRepository = DocumentStateRepository(
         database=database,
         dataRoot=managedDataRoot,
@@ -358,11 +390,82 @@ def createApp(
     ) -> dict[str, str]:
         """Create a pending proposal from the constrained agent proposal channel."""
         _validateToken(sageProposalToken, proposalToken)
-        return approvalStateRepository.createProposal(
-            actionType=approvalRequest.actionType,
-            payload=approvalRequest.payload.model_dump(),
-            idempotencyKey=getattr(approvalRequest, "idempotencyKey", None),
+        try:
+            return approvalStateRepository.createProposal(
+                actionType=approvalRequest.actionType,
+                payload=approvalRequest.payload.model_dump(),
+                idempotencyKey=getattr(approvalRequest, "idempotencyKey", None),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.post("/v1/email-drafts", status_code=status.HTTP_201_CREATED)
+    def createEmailDraft(
+        draftPayload: EmailDraftCreatePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Persist a reversible email draft without creating an approval request."""
+        _validateToken(sageProposalToken, proposalToken)
+        return emailDraftStateRepository.createDraft(
+            draftPayload.model_dump(exclude={"idempotencyKey"}),
+            draftPayload.idempotencyKey,
         )
+
+    @app.post("/v1/email-drafts/{draftId}/versions", status_code=status.HTTP_201_CREATED)
+    def reviseEmailDraft(
+        draftId: str,
+        draftPayload: EmailDraftRevisionPayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Append a version while superseding any old pending approval card."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return emailDraftStateRepository.reviseDraft(
+                draftId,
+                draftPayload.expectedVersion,
+                draftPayload.model_dump(exclude={"expectedVersion", "idempotencyKey"}),
+                draftPayload.idempotencyKey,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.post(
+        "/v1/email-drafts/{draftId}/versions/{draftVersion}/approval-request",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def requestEmailDraftApproval(
+        draftId: str,
+        draftVersion: int,
+        approvalPayload: EmailDraftApprovalPayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, str]:
+        """Bind a new approval request to one exact current email draft version."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            draft = emailDraftStateRepository.getDraft(draftId, draftVersion)
+            return approvalStateRepository.createProposal(
+                "SEND_GMAIL_MESSAGE",
+                {
+                    "accountKey": draft["accountKey"],
+                    "body": draft["body"],
+                    "draftId": draft["id"],
+                    "draftVersion": draft["version"],
+                    "subject": draft["subject"],
+                    "to": draft["to"],
+                },
+                approvalPayload.idempotencyKey,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.get("/v1/email-drafts")
+    def listEmailDrafts() -> list[dict[str, object]]:
+        """List durable versions for local operator and diagnostics surfaces."""
+        return emailDraftStateRepository.listDrafts()
 
     @app.post("/v1/approval-requests/{approvalId}/confirm")
     def confirmApprovalRequest(

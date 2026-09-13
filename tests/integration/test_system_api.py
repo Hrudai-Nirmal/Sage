@@ -59,6 +59,7 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "cases": 0,
         "documents": 0,
         "driveFiles": 0,
+        "emailDrafts": 0,
         "emails": 0,
         "calendarEvents": 0,
         "calendarReminders": 0,
@@ -74,6 +75,7 @@ def testServesLocalOperatorDashboardAndOverview(tmp_path):
         "cases": [],
         "documents": [],
         "driveFiles": [],
+        "emailDrafts": [],
         "emails": [],
         "calendarEvents": [],
         "calendarReminders": [],
@@ -257,6 +259,72 @@ def testGoogleSendAndDeleteProposalsRequireIndependentConfirmation(tmp_path):
         assert connection.execute(
             "SELECT action_type, stage FROM google_actions"
         ).fetchall() == [("SEND_GMAIL_MESSAGE", "CREATE_DRAFT")]
+
+
+def testCreatesRevisesAndApprovesAnExactEmailDraftVersion(tmp_path):
+    """Core exposes a durable draft workflow without allowing an old card to send edits."""
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=tmp_path / "sage.db",
+        proposalToken="proposal-token",
+    )
+    proposalHeaders = {"X-Sage-Proposal-Token": "proposal-token"}
+    originalMessage = {
+        "accountKey": "work",
+        "to": ["person@example.com"],
+        "subject": "Original subject",
+        "body": "Original body",
+    }
+
+    with TestClient(app) as client:
+        draftResponse = client.post(
+            "/v1/email-drafts", headers=proposalHeaders, json=originalMessage
+        )
+        draft = draftResponse.json()
+        revisedResponse = client.post(
+            f"/v1/email-drafts/{draft['id']}/versions",
+            headers=proposalHeaders,
+            json={
+                **originalMessage,
+                "expectedVersion": 1,
+                "subject": "Corrected subject",
+            },
+        )
+        revisedDraft = revisedResponse.json()
+        mismatchResponse = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={
+                "actionType": "SEND_GMAIL_MESSAGE",
+                "payload": {
+                    **originalMessage,
+                    "draftId": draft["id"],
+                    "draftVersion": 2,
+                    "subject": "Tampered subject",
+                },
+            },
+        )
+        approvalResponse = client.post(
+            f"/v1/email-drafts/{draft['id']}/versions/2/approval-request",
+            headers=proposalHeaders,
+            json={"idempotencyKey": "telegram:90:SEND_GMAIL_MESSAGE"},
+        )
+        approvalId = approvalResponse.json()["id"]
+        client.post(
+            f"/v1/approval-requests/{approvalId}/confirm",
+            headers={"X-Sage-Approval-Token": "approval-token"},
+            json={"approvedBy": "telegram:8961856168"},
+        )
+        listedDrafts = client.get("/v1/email-drafts").json()
+
+    assert draftResponse.status_code == 201
+    assert draft["status"] == "DRAFT"
+    assert revisedResponse.status_code == 201
+    assert revisedDraft["version"] == 2
+    assert mismatchResponse.status_code == 409
+    assert approvalResponse.status_code == 201
+    assert listedDrafts[0]["status"] == "APPROVED"
+    assert listedDrafts[0]["subject"] == "Corrected subject"
 
 
 def testIndexesPersonalWorkCalendarAndAllAccountDriveFiles(tmp_path):
