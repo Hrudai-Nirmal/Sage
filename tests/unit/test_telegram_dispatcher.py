@@ -583,13 +583,17 @@ def testToolAwareConversationExecutesCallAndSynthesizesEvidence(monkeypatch):
         return {"choices": [{"message": {"content": "No matching Neon email was found."}}]}
 
     monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
-    monkeypatch.setattr(
-        dispatcher,
-        "executeSageTool",
-        lambda secrets, toolName, rawArguments, userMessage, requestKey="": {
-            "status": "COMPLETE", "source": "gmail-index", "results": []
-        },
-    )
+    def fakeExecuteTool(
+        secrets,
+        toolName,
+        rawArguments,
+        userMessage,
+        requestKey="",
+        hasExplicitGmailProposalIntent=False,
+    ):
+        return {"status": "COMPLETE", "source": "gmail-index", "results": []}
+
+    monkeypatch.setattr(dispatcher, "executeSageTool", fakeExecuteTool)
 
     reply = dispatcher.runToolAwareConversation(
         {"SAGE_MODEL_API_KEY": "model"},
@@ -632,13 +636,18 @@ def testToolAwareConversationCanSearchThenMutateAnExactCalendarEvent(monkeypatch
         return {"choices": [{"message": {"content": "The Calendar update is queued."}}]}
 
     monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
-    monkeypatch.setattr(
-        dispatcher,
-        "executeSageTool",
-        lambda secrets, toolName, rawArguments, userMessage, requestKey="": executedTools.append(
-            toolName
-        ) or {"status": "COMPLETE"},
-    )
+    def fakeExecuteTool(
+        secrets,
+        toolName,
+        rawArguments,
+        userMessage,
+        requestKey="",
+        hasExplicitGmailProposalIntent=False,
+    ):
+        executedTools.append(toolName)
+        return {"status": "COMPLETE"}
+
+    monkeypatch.setattr(dispatcher, "executeSageTool", fakeExecuteTool)
 
     reply = dispatcher.runToolAwareConversation(
         {"SAGE_MODEL_API_KEY": "model"},
@@ -728,6 +737,84 @@ def testGmailSendAlwaysCreatesApprovalInsteadOfCallingGoogle(monkeypatch):
     assert draftOnlyResult["status"] == "NEEDS_EXPLICIT_REQUEST"
     assert toolResult["status"] == "PENDING_APPROVAL"
     assert proposals[0][0] == "SEND_GMAIL_MESSAGE"
+
+
+def testConfirmedEmailDraftForcesTrustedApprovalProposal(monkeypatch):
+    """A contextual confirmation must open the button flow instead of another chat loop."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramConfirmedEmail", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelPayloads = []
+    executedTools = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        if len(modelPayloads) == 1:
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "send-1",
+                            "type": "function",
+                            "function": {
+                                "name": "send_gmail_message",
+                                "arguments": (
+                                    '{"accountKey":"work","to":["friend@example.com"],'
+                                    '"subject":"Party invitation","body":"Join me at 7 PM."}'
+                                ),
+                            },
+                        }],
+                    }
+                }]
+            }
+        return {"choices": [{"message": {"content": "Approval card sent."}}]}
+
+    def fakeExecuteSageTool(
+        secrets,
+        toolName,
+        rawArguments,
+        userMessage,
+        requestKey="",
+        hasExplicitGmailProposalIntent=False,
+    ):
+        executedTools.append((toolName, hasExplicitGmailProposalIntent))
+        return {"status": "PENDING_APPROVAL", "result": "Approval card sent."}
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(dispatcher, "executeSageTool", fakeExecuteSageTool)
+    conversation = [
+        {
+            "role": "user",
+            "content": "Draft an email from my work mail inviting friend@example.com to a party.",
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "**To:** friend@example.com\n**Subject:** Party invitation\n\n"
+                "Join me at 7 PM. Please confirm if you would like me to send it."
+            ),
+        },
+        {"role": "user", "content": "Yes"},
+    ]
+
+    reply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        conversation,
+        "Yes",
+        "telegram:60",
+    )
+
+    assert reply == "Approval card sent."
+    assert modelPayloads[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "send_gmail_message"},
+    }
+    assert len(modelPayloads) == 1
+    assert executedTools == [("send_gmail_message", True)]
 
 
 def testGoogleActionWorkerStagesGmailDraftBeforeSending(monkeypatch):

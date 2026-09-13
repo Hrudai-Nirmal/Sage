@@ -427,6 +427,7 @@ def executeSageTool(
     rawArguments: str,
     userMessage: str,
     requestKey: str = "",
+    hasExplicitGmailProposalIntent: bool = False,
 ) -> dict[str, object]:
     """Execute one validated model-selected capability inside deterministic policy."""
     try:
@@ -499,7 +500,9 @@ def executeSageTool(
         }
 
     if toolName == "send_gmail_message":
-        if not re.search(r"\bsend\b", userMessage, flags=re.IGNORECASE):
+        if not hasExplicitGmailProposalIntent and not re.search(
+            r"\bsend\b", userMessage, flags=re.IGNORECASE
+        ):
             return {
                 "status": "NEEDS_EXPLICIT_REQUEST",
                 "error": "The user did not explicitly request sending this email.",
@@ -988,9 +991,11 @@ def _appendExecutedToolCalls(
     secrets: dict[str, str],
     userMessage: str,
     requestKey: str,
-) -> None:
+    hasExplicitGmailProposalIntent: bool,
+) -> list[dict[str, object]]:
     """Validate, execute, and append one bounded batch of model-selected tools."""
     modelMessages.append(assistantMessage)
+    executedResults: list[dict[str, object]] = []
     for toolCall in toolCalls:
         if not isinstance(toolCall, dict):
             raise RuntimeError("Sage returned an invalid tool call")
@@ -1003,8 +1008,14 @@ def _appendExecutedToolCalls(
         if not isinstance(toolName, str) or not isinstance(rawArguments, str):
             raise RuntimeError("Sage returned an invalid tool function")
         toolResult = executeSageTool(
-            secrets, toolName, rawArguments, userMessage, requestKey
+            secrets,
+            toolName,
+            rawArguments,
+            userMessage,
+            requestKey,
+            hasExplicitGmailProposalIntent,
         )
+        executedResults.append(toolResult)
         modelMessages.append(
             {
                 "role": "tool",
@@ -1013,6 +1024,61 @@ def _appendExecutedToolCalls(
                 "content": json.dumps(toolResult, ensure_ascii=False)[:20_000],
             }
         )
+    return executedResults
+
+
+def getPendingApprovalReply(toolResults: list[dict[str, object]]) -> str | None:
+    """Return Core's exact approval confirmation without model reinterpretation."""
+    for toolResult in toolResults:
+        if toolResult.get("status") != "PENDING_APPROVAL":
+            continue
+        approvalResult = toolResult.get("result")
+        if not isinstance(approvalResult, str) or not approvalResult.strip():
+            raise RuntimeError("Approval tool returned no confirmation")
+        return approvalResult.strip()
+    return None
+
+
+def hasConfirmedGmailDraft(
+    conversation: list[dict[str, object]], userMessage: str
+) -> bool:
+    """Recognize a user's explicit request to advance a complete draft to button approval."""
+    assistantDrafts = [
+        str(message.get("content", ""))
+        for message in conversation
+        if message.get("role") == "assistant"
+    ]
+    if not assistantDrafts or re.search(
+        r"\b(?:e-?mail|mail|send)\b", assistantDrafts[-1], flags=re.IGNORECASE
+    ) is None:
+        return False
+    normalizedDrafts = [
+        re.sub(r"[*_`]", "", assistantDraft) for assistantDraft in assistantDrafts[-2:]
+    ]
+    hasCompleteDraft = any(
+        re.search(r"(?im)^\s*to:\s*\S+@\S+", normalizedDraft)
+        and re.search(r"(?im)^\s*subject:\s*\S+", normalizedDraft)
+        for normalizedDraft in normalizedDrafts
+    )
+    if not hasCompleteDraft:
+        return False
+    normalizedMessage = userMessage.strip()
+    isAffirmative = re.fullmatch(
+        r"(?:yes(?:\s+please)?|confirm(?:ed)?|go\s+ahead|do\s+it|proceed)[.!\s]*",
+        normalizedMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    requestsApproval = re.search(
+        r"\b(?:approv(?:al|e|ing)|confirmation\s+button)\b",
+        normalizedMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    requestsSend = re.search(
+        r"\bsend\b.*\b(?:it|this|e-?mail|mail|message)\b",
+        normalizedMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    return isAffirmative or requestsApproval or requestsSend
 
 
 def runToolAwareConversation(
@@ -1030,13 +1096,20 @@ def runToolAwareConversation(
         {"role": "system", "content": loadSystemPrompt("sage")},
         *conversation,
     ]
+    hasExplicitGmailProposalIntent = hasConfirmedGmailDraft(conversation, userMessage)
+    initialToolChoice: str | dict[str, object] = "auto"
+    if hasExplicitGmailProposalIntent:
+        initialToolChoice = {
+            "type": "function",
+            "function": {"name": "send_gmail_message"},
+        }
     initialResponse = postJson(
         MODEL_URL,
         {
             "model": MODEL_ID,
             "messages": modelMessages,
             "tools": getToolDefinitions(),
-            "tool_choice": "auto",
+            "tool_choice": initialToolChoice,
             "max_tokens": 768,
             "temperature": 0.4,
         },
@@ -1055,9 +1128,18 @@ def runToolAwareConversation(
     selectedMutationCount = _countMutationCalls(toolCalls)
     if selectedMutationCount > 1:
         raise RuntimeError("Sage may select at most one mutation in one turn")
-    _appendExecutedToolCalls(
-        modelMessages, assistantMessage, toolCalls, secrets, userMessage, requestKey
+    toolResults = _appendExecutedToolCalls(
+        modelMessages,
+        assistantMessage,
+        toolCalls,
+        secrets,
+        userMessage,
+        requestKey,
+        hasExplicitGmailProposalIntent,
     )
+    pendingApprovalReply = getPendingApprovalReply(toolResults)
+    if pendingApprovalReply is not None:
+        return pendingApprovalReply
 
     finalResponse = postJson(
         MODEL_URL,
@@ -1079,14 +1161,18 @@ def runToolAwareConversation(
         followupMutationCount = _countMutationCalls(followupToolCalls)
         if selectedMutationCount + followupMutationCount > 1:
             raise RuntimeError("Sage may select at most one mutation in one turn")
-        _appendExecutedToolCalls(
+        followupToolResults = _appendExecutedToolCalls(
             modelMessages,
             followupMessage,
             followupToolCalls,
             secrets,
             userMessage,
             requestKey,
+            hasExplicitGmailProposalIntent,
         )
+        pendingApprovalReply = getPendingApprovalReply(followupToolResults)
+        if pendingApprovalReply is not None:
+            return pendingApprovalReply
         finalResponse = postJson(
             MODEL_URL,
             {
