@@ -17,7 +17,10 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "delete_calendar_event",
         "delete_drive_file",
         "rename_drive_file",
+        "import_download_file",
         "search_calendar",
+        "search_documents",
+        "search_downloads",
         "search_drive",
         "search_gmail",
         "send_gmail_message",
@@ -44,6 +47,18 @@ def testValidatesToolArgumentsAndConfiguredAccountKeys():
         validateToolArguments("send_email", "{}")
     with pytest.raises(ValueError, match="JSON"):
         validateToolArguments("search_gmail", "not-json")
+
+
+def testValidatesCopyOnlyDownloadImportPath():
+    """The model cannot use the import tool to escape the sole allowlisted source root."""
+    assert validateToolArguments(
+        "import_download_file", '{"relativePath":"applications/resume.pdf"}'
+    ) == {"relativePath": "applications/resume.pdf"}
+
+    with pytest.raises(ValueError, match="relative"):
+        validateToolArguments("import_download_file", '{"relativePath":"../secret.txt"}')
+    with pytest.raises(ValueError, match="relative"):
+        validateToolArguments("import_download_file", '{"relativePath":"/etc/passwd"}')
 
 
 def testValidatesGmailSendAndCalendarMutationArguments():

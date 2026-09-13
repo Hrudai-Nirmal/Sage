@@ -28,6 +28,7 @@ from sage_core.tool_registry import getToolDefinitions, validateToolArguments
 
 DATA_ROOT = Path(os.environ.get("SAGE_DATA_ROOT", "/Users/hrudainirmal/SageData"))
 DATABASE_PATH = DATA_ROOT / "database" / "sage.db"
+DOWNLOADS_ROOT = Path("/Users/hrudainirmal/Downloads")
 MODEL_URL = "http://127.0.0.1:18080/v1/chat/completions"
 MODEL_ID = str(DATA_ROOT / "models" / "qwen3.5-9b-6bit")
 IRIS_URL = "http://127.0.0.1:18081/v1/chat/completions"
@@ -39,6 +40,7 @@ MUTATION_TOOL_NAMES = {
     "create_drive_folder",
     "delete_calendar_event",
     "delete_drive_file",
+    "import_download_file",
     "rename_drive_file",
     "send_gmail_message",
     "update_calendar_event",
@@ -344,6 +346,81 @@ def queueGoogleAction(
     return actionRepository.queueAction(actionType, accountKey, payload, requestKey)
 
 
+def searchDownloads(query: str, resultLimit: int = 20) -> list[dict[str, object]]:
+    """Search allowlisted Downloads filenames without reading or following linked content."""
+    queryTerms = [queryTerm.casefold() for queryTerm in query.split() if queryTerm][:10]
+    searchResults: list[dict[str, object]] = []
+    inspectedCount = 0
+    for candidatePath in DOWNLOADS_ROOT.rglob("*"):
+        inspectedCount += 1
+        if inspectedCount > 10_000:
+            break
+        if candidatePath.is_symlink() or not candidatePath.is_file():
+            continue
+        resolvedPath = candidatePath.resolve()
+        if not resolvedPath.is_relative_to(DOWNLOADS_ROOT.resolve()):
+            continue
+        relativePath = str(resolvedPath.relative_to(DOWNLOADS_ROOT.resolve()))
+        if all(queryTerm in relativePath.casefold() for queryTerm in queryTerms):
+            searchResults.append(
+                {
+                    "name": resolvedPath.name,
+                    "relativePath": relativePath,
+                    "sizeBytes": resolvedPath.stat().st_size,
+                }
+            )
+            if len(searchResults) >= resultLimit:
+                break
+    return searchResults
+
+
+def searchRegisteredDocuments(query: str, resultLimit: int = 20) -> list[dict[str, str]]:
+    """Search the managed registry without traversing arbitrary filesystem paths."""
+    queryTerms = [queryTerm.casefold() for queryTerm in query.split() if queryTerm][:10]
+    whereClauses = []
+    queryValues: list[object] = []
+    searchableColumns = "lower(canonical_name || ' ' || original_name || ' ' || source_relative_path)"
+    for queryTerm in queryTerms:
+        whereClauses.append(f"{searchableColumns} LIKE ?")
+        queryValues.append(f"%{queryTerm}%")
+    whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
+    queryValues.append(resultLimit)
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        documentRows = connection.execute(
+            f"""SELECT id, canonical_name, original_name, checksum
+                FROM documents {whereSql} ORDER BY imported_at DESC LIMIT ?""",
+            queryValues,
+        ).fetchall()
+    return [
+        {
+            "id": str(documentId),
+            "name": str(canonicalName),
+            "originalName": str(originalName),
+            "checksum": str(checksum),
+        }
+        for documentId, canonicalName, originalName, checksum in documentRows
+    ]
+
+
+def importDownloadFile(
+    secrets: dict[str, str], relativePath: str
+) -> dict[str, str]:
+    """Ask Core to copy one exact Downloads file into managed storage and register it."""
+    importedDocument = postJson(
+        f"{CORE_URL}/v1/documents/imports",
+        {"sourceRoot": "downloads", "relativePath": relativePath},
+        {
+            "Content-Type": "application/json",
+            "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
+        },
+    )
+    return {
+        "id": str(importedDocument["id"]),
+        "name": str(importedDocument["name"]),
+        "checksum": str(importedDocument["checksum"]),
+    }
+
+
 def executeSageTool(
     secrets: dict[str, str],
     toolName: str,
@@ -392,6 +469,33 @@ def executeSageTool(
             "status": "COMPLETE",
             "source": "google-drive-live",
             "results": searchLiveDrive(secrets, arguments["query"]),
+        }
+    if toolName == "search_downloads":
+        return {
+            "status": "COMPLETE",
+            "source": "allowlisted-downloads-metadata",
+            "results": searchDownloads(str(arguments["query"])),
+        }
+    if toolName == "search_documents":
+        return {
+            "status": "COMPLETE",
+            "source": "sage-document-registry",
+            "results": searchRegisteredDocuments(str(arguments["query"])),
+        }
+    if toolName == "import_download_file":
+        if not re.search(
+            r"\b(?:copy|import)\b.*\b(?:download|file|document|pdf|docx|image)\b",
+            userMessage,
+            flags=re.IGNORECASE,
+        ):
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not explicitly request this copy-only import.",
+            }
+        return {
+            "status": "COMPLETE",
+            "source": "sage-document-registry",
+            "document": importDownloadFile(secrets, str(arguments["relativePath"])),
         }
 
     if toolName == "send_gmail_message":

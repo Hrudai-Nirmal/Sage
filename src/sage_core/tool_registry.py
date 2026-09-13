@@ -64,6 +64,44 @@ def getToolDefinitions() -> list[dict[str, object]]:
         {
             "type": "function",
             "function": {
+                "name": "search_downloads",
+                "description": (
+                    "Search filenames in the sole allowlisted host Downloads folder. This returns "
+                    "metadata only and never changes a host file."
+                ),
+                "parameters": _objectSchema(
+                    {"query": {"type": "string", "maxLength": 2000}}, ["query"]
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_documents",
+                "description": "Search files already copied into Sage's managed document registry.",
+                "parameters": _objectSchema(
+                    {"query": {"type": "string", "maxLength": 2000}}, ["query"]
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "import_download_file",
+                "description": (
+                    "Copy one exact relative file path from the allowlisted Downloads folder into "
+                    "Sage's managed document registry. Use only when the user explicitly asks to "
+                    "import or copy it. Never move, rename, or alter the host source."
+                ),
+                "parameters": _objectSchema(
+                    {"relativePath": {"type": "string", "minLength": 1, "maxLength": 2000}},
+                    ["relativePath"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "send_gmail_message",
                 "description": (
                     "Prepare an email for independent user approval. This never sends directly; "
@@ -218,6 +256,20 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
         if not isinstance(query, str) or len(query) > 2_000:
             raise ValueError("Tool query must be a string of at most 2000 characters")
         return {"query": query}
+
+    if toolName == "import_download_file":
+        _rejectUnknownKeys(arguments, {"relativePath"})
+        relativePath = arguments.get("relativePath")
+        if (
+            not isinstance(relativePath, str)
+            or not relativePath.strip()
+            or len(relativePath) > 2_000
+            or relativePath.startswith("/")
+            or "\x00" in relativePath
+            or ".." in relativePath.split("/")
+        ):
+            raise ValueError("Download import requires a safe relative path")
+        return {"relativePath": relativePath.strip()}
 
     if toolName == "send_gmail_message":
         _rejectUnknownKeys(arguments, {"accountKey", "to", "subject", "body"})

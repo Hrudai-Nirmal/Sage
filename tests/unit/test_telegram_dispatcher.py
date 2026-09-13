@@ -836,6 +836,69 @@ def testGoogleActionWorkerCompletesCalendarMutationAndNotifies(monkeypatch):
     assert "Created Calendar event" in notifications[0][0]
 
 
+def testSearchesDownloadsAndImportsOnlyThroughCoreCopyBoundary(tmp_path, monkeypatch):
+    """Telegram file work discovers host paths but imports through the managed registry API."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDocumentTools", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    downloadsRoot = tmp_path / "Downloads"
+    downloadsRoot.mkdir()
+    (downloadsRoot / "Resume.pdf").write_bytes(b"resume")
+    monkeypatch.setattr(dispatcher, "DOWNLOADS_ROOT", downloadsRoot)
+    databasePath = tmp_path / "sage.db"
+    with sqlite3.connect(databasePath) as connection:
+        connection.execute(
+            """CREATE TABLE documents (
+                id TEXT, canonical_name TEXT, original_name TEXT,
+                source_relative_path TEXT, checksum TEXT, imported_at TEXT
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO documents VALUES (
+                'document-0', 'Resume-def.pdf', 'Resume.pdf', 'Resume.pdf',
+                'def', '2026-09-13T00:00:00+00:00'
+            )"""
+        )
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+    calls = []
+    monkeypatch.setattr(
+        dispatcher,
+        "postJson",
+        lambda url, payload, headers: calls.append((url, payload, headers)) or {
+            "id": "document-1", "name": "Resume-abc.pdf", "path": "/managed/Resume-abc.pdf",
+            "checksum": "abc",
+        },
+    )
+
+    searchResult = dispatcher.executeSageTool(
+        {}, "search_downloads", '{"query":"resume"}', "Find my resume in Downloads"
+    )
+    registeredResult = dispatcher.executeSageTool(
+        {}, "search_documents", '{"query":"resume"}', "Find my registered resume"
+    )
+    rejectedImport = dispatcher.executeSageTool(
+        {}, "import_download_file", '{"relativePath":"Resume.pdf"}', "Where is my resume?"
+    )
+    importResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "import_download_file",
+        '{"relativePath":"Resume.pdf"}',
+        "Import Resume.pdf from Downloads into Sage",
+    )
+
+    assert searchResult["results"][0]["relativePath"] == "Resume.pdf"
+    assert registeredResult["results"][0]["id"] == "document-0"
+    assert rejectedImport["status"] == "NEEDS_EXPLICIT_REQUEST"
+    assert importResult == {
+        "status": "COMPLETE",
+        "source": "sage-document-registry",
+        "document": {"id": "document-1", "name": "Resume-abc.pdf", "checksum": "abc"},
+    }
+    assert calls[0][1] == {"sourceRoot": "downloads", "relativePath": "Resume.pdf"}
+
+
 def testFormatsVerifiedResearchLinksWithoutModelRewriting():
     """Research URLs are appended deterministically and can be recalled without a new search."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"

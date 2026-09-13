@@ -76,6 +76,8 @@ Ordinary chat also supports explicit Google actions with complete details:
 - Calendar deletion always creates a one-time Telegram approval card. Approved Calendar operations use a durable retry queue, and creates use a stable Google event ID so retries do not duplicate the event.
 - The local operator dashboard shows pending Google outbox stages and retry counts without exposing email bodies.
 
+Document handling is also available through ordinary Telegram phrasing. Sage can search filename metadata in the allowlisted `/Users/hrudainirmal/Downloads` tree, search its managed document registry, and copy one exact requested Downloads file into `/Users/hrudainirmal/SageData/documents/general`. It skips symlinks, rejects absolute and parent-traversal paths, never modifies the source, deduplicates imported content by SHA-256, and returns only the managed document ID/name/checksum to the model.
+
 Gmail polling never marks email read or changes labels/archives; outbound mail runs only through the separately approved outbox. Clear security, billing, placement, and deadline messages can trigger Notifications; suggested tasks remain approval-gated. Calendar creates deterministic reminders 10 minutes before timed events. Drive is never monitored in the background.
 
 Send a photo, JPEG/PNG/WebP document, or PDF in Main for Iris-assisted analysis. PDFs currently analyze the first rendered page. Telegram-reported sizes are checked when present and downloaded bytes are always capped at 20 MB; temporary files are deleted after the request.
