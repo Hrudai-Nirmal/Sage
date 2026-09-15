@@ -347,6 +347,11 @@ def testSearchesIndexedMailWithoutCallingGoogle(tmp_path, monkeypatch):
     )
     assert dispatcher.getMailQuery("Do I have any emails from Neon?") == "from:Neon"
     assert dispatcher.getMailQuery("Find emails about placements") == "placements"
+    assert (
+        dispatcher.getMailQuery("Look for any assessment links in my mails")
+        == "assessment links"
+    )
+    assert dispatcher.getMailQuery("Search for invoices across my email") == "invoices"
     assert dispatcher.getMailQuery("Show me my inbox") == ""
     mailReply = dispatcher.formatMailSearch(dispatcher.searchIndexedMail("placement Friday"))
 

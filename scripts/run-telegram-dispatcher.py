@@ -156,6 +156,22 @@ def getMailQuery(messageText: str) -> str | None:
         relation = (receivedMailMatch.group(1) or "").casefold()
         receivedQuery = (receivedMailMatch.group(2) or "").strip()
         return f"from:{receivedQuery}" if relation == "from" else receivedQuery
+    contentFirstMailMatch = re.match(
+        r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
+        r"(?:check|search|find|show|scan|look\s+for)"
+        r"(?:\s+for)?(?:\s+me)?(?:\s+any)?\s+(.+?)\s+"
+        r"(?:in|inside|across)\s+(?:all\s+)?(?:of\s+)?(?:my\s+)?"
+        r"(?:gmail|e-?mails?|mails?|inbox)(?:\s+accounts?)?[.?!]*$",
+        messageText.strip(),
+        flags=re.IGNORECASE,
+    )
+    if contentFirstMailMatch is not None:
+        return re.sub(
+            r"^(?:(?:a|an|the|my|recent|latest|recently)\s+)+",
+            "",
+            contentFirstMailMatch.group(1).strip(),
+            flags=re.IGNORECASE,
+        )
     mailMatch = re.match(
         r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
         r"(?:check|search|find|show|scan|look\s+for)"

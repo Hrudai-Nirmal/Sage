@@ -32,22 +32,21 @@ def testCalendarCreateIsIdempotentlyQueuedAndRetryable(tmp_path):
             "SELECT action_type, status FROM audit_events WHERE target_id = ?",
             (firstAction["id"],),
         ).fetchall() == [("CREATE_CALENDAR_EVENT", "PENDING")]
-    claimedAction = actionRepository.claimPendingAction(
-        datetime(2026, 9, 14, tzinfo=UTC)
-    )
+    claimTime = datetime.now(UTC) + timedelta(seconds=1)
+    claimedAction = actionRepository.claimPendingAction(claimTime)
 
     assert secondAction == firstAction
     assert claimedAction is not None
     assert claimedAction["actionType"] == "CREATE_CALENDAR_EVENT"
     assert claimedAction["payload"] == payload
     actionRepository.failAction(
-        claimedAction["id"], "TimeoutError", datetime(2026, 9, 14, tzinfo=UTC)
+        claimedAction["id"], "TimeoutError", claimTime
     )
     assert actionRepository.claimPendingAction(
-        datetime(2026, 9, 14, tzinfo=UTC) + timedelta(minutes=1)
+        claimTime + timedelta(minutes=1)
     ) is None
     retriedAction = actionRepository.claimPendingAction(
-        datetime(2026, 9, 14, tzinfo=UTC) + timedelta(minutes=3)
+        claimTime + timedelta(minutes=3)
     )
     assert retriedAction is not None
     actionRepository.completeAction(retriedAction["id"], "google-event-1")
