@@ -9,6 +9,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Online research uses Tavily basic search plus local Trafilatura extraction, with bounded source counts, public-network URL checks, durable citations, and retrieval audit events.
 - Versioned role contracts in `prompts/` define Sage's user-facing authority and Iris's restricted background-analysis role. The dispatcher loads Sage's prompt for every model call.
 - Ordinary Telegram conversation uses a closed capability registry. Sage may select only implemented Gmail, Calendar, and Drive tools; deterministic validation and policy code executes each call, and the model receives the bounded result for its final answer.
+- A code-owned capability broker injects Sage's complete configured ability and authority manifest into every model turn. It permits automatic inference of one read-only source, asks when multiple sources are named, retries only technical failures on retry-safe operations at most three times, and blocks model claims that configured integrations do not exist.
 - Telegram images and image/PDF documents are bounded at 20 MB, inspected by Iris, synthesized by Sage, and removed from temporary storage after each request.
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.

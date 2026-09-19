@@ -502,6 +502,55 @@ def testLoadsVersionedSagePrompt():
 
     assert prompt.startswith("# Sage system prompt")
     assert "explicit user approval" in prompt
+    assert "Live capability manifest" in prompt
+    assert "gmail.search" in prompt
+    assert "gmail.draft" in prompt
+
+
+def testToolExecutionReportsConfiguredCapabilityAfterRetryExhaustion(monkeypatch):
+    """A transient outage is surfaced in chat without claiming the ability is absent."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramCapabilityFailure", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    monkeypatch.setattr(
+        dispatcher,
+        "executeCapability",
+        lambda capabilityName, operation: (_ for _ in ()).throw(
+            dispatcher.CapabilityExecutionError("gmail.search", 3)
+        ),
+    )
+    modelMessages = []
+    toolResults = dispatcher._appendExecutedToolCalls(
+        modelMessages,
+        {
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "mail-1",
+                "function": {"name": "search_gmail", "arguments": '{"query":"assessment"}'},
+            }],
+        },
+        [{
+            "id": "mail-1",
+            "function": {"name": "search_gmail", "arguments": '{"query":"assessment"}'},
+        }],
+        {},
+        "Search my Gmail for assessments",
+        "telegram:90",
+        False,
+    )
+
+    assert toolResults == [{
+        "attempts": 3,
+        "capabilityId": "gmail.search",
+        "status": "TEMPORARILY_UNAVAILABLE",
+        "toolName": "search_gmail",
+    }]
+    assert dispatcher.getCapabilityFailureReply(toolResults) == (
+        "Gmail search is configured, but it is temporarily unavailable after 3 technical "
+        "attempts. No action was taken."
+    )
 
 
 def testExecutesModelSelectedGmailToolAgainstRealIndexBoundary(tmp_path, monkeypatch):
@@ -611,6 +660,91 @@ def testToolAwareConversationExecutesCallAndSynthesizesEvidence(monkeypatch):
     assert modelPayloads[0]["tools"]
     assert modelPayloads[1]["messages"][-1]["role"] == "tool"
     assert modelPayloads[1]["messages"][-1]["tool_call_id"] == "call-1"
+
+
+def testReadSourceInferenceForcesOneSourceAndAsksWhenMultiple(monkeypatch):
+    """Sage may infer a named read source but cannot silently choose between two."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramReadInference", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelPayloads = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        if len(modelPayloads) > 1:
+            return {"choices": [{"message": {"content": "No matching email was found."}}]}
+        return {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "mail-read",
+                        "function": {"name": "search_gmail", "arguments": '{"query":"assessment"}'},
+                    }],
+                }
+            }]
+        }
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(
+        dispatcher,
+        "executeSageTool",
+        lambda *arguments, **keywordArguments: {
+            "status": "COMPLETE",
+            "source": "gmail-index",
+            "results": [],
+        },
+    )
+
+    dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "Search Gmail for assessment links"}],
+        "Search Gmail for assessment links",
+    )
+    ambiguousReply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "Search Gmail and Drive for assessment links"}],
+        "Search Gmail and Drive for assessment links",
+    )
+
+    assert modelPayloads[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_gmail"},
+    }
+    assert ambiguousReply == "Which source should I search: Gmail, Google Drive?"
+
+
+def testFalseCapabilityDenialFallsBackToGroundedToolEvidence(monkeypatch):
+    """A model denial after a successful Gmail search is replaced with deterministic results."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDenialFence", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    toolResults = [{
+        "status": "COMPLETE",
+        "toolName": "search_gmail",
+        "results": [{
+            "accountKey": "work",
+            "sender": "assessments@example.com",
+            "subject": "Assessment link",
+            "snippet": "Open the assessment",
+            "bodyText": "https://example.com/assessment",
+            "internalDate": "1789092000000",
+        }],
+    }]
+
+    reply = dispatcher.getCapabilityDenialFallback(
+        "I cannot access your Gmail inbox.", toolResults
+    )
+
+    assert reply is not None
+    assert "Assessment link" in reply
+    assert "work" in reply
+    assert "cannot access" not in reply
 
 
 def testToolAwareConversationCanSearchThenMutateAnExactCalendarEvent(monkeypatch):
