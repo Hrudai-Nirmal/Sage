@@ -1,18 +1,33 @@
 """Test Sage's durable, provenance-aware personal context registry."""
 
-import json
-
 import pytest
 
 from sage_core.context_state import ContextStateRepository
 from sage_core.database import SageDatabase
 
 
-def testStoresStandardContextWithRevisionsAndManagedMirror(tmp_path):
-    """Explicit ordinary memories remain reviewable in SQLite and managed context files."""
+def testCreatesCanonicalMarkdownFilesAndMirrorsStandardValues(tmp_path):
+    """The complete inspectable context skeleton exists before any memory is seeded."""
     dataRoot = tmp_path / "SageData"
     database = SageDatabase(dataRoot / "database" / "sage.db")
     repository = ContextStateRepository(database, dataRoot)
+
+    expectedFiles = {
+        "education-work.md",
+        "identity.md",
+        "important-dates.md",
+        "owned-items.md",
+        "people.md",
+        "preferences.md",
+        "projects-commitments.md",
+        "registry.md",
+        "user-rules.md",
+    }
+    assert {contextPath.name for contextPath in (dataRoot / "context").glob("*.md")} == expectedFiles
+    assert all(
+        contextPath.stat().st_mode & 0o777 == 0o600
+        for contextPath in (dataRoot / "context").glob("*.md")
+    )
 
     firstRecord = repository.upsertRecord(
         category="preferences",
@@ -38,13 +53,31 @@ def testStoresStandardContextWithRevisionsAndManagedMirror(tmp_path):
         "English",
         "English unless I ask otherwise",
     ]
-    mirrorPath = dataRoot / "context" / "preferences" / "default-language.json"
-    assert json.loads(mirrorPath.read_text())["value"] == "English unless I ask otherwise"
+    mirrorPath = dataRoot / "context" / "preferences.md"
+    assert "default-language" in mirrorPath.read_text()
+    assert "English unless I ask otherwise" in mirrorPath.read_text()
+    assert "generated view" in mirrorPath.read_text()
     assert mirrorPath.stat().st_mode & 0o777 == 0o600
     with database.connectDatabase() as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM audit_events WHERE target_type = 'context_record'"
         ).fetchone()[0] == 2
+
+
+def testRepositoryStartupRestoresGeneratedMarkdownFromSqlite(tmp_path):
+    """Manual view edits cannot override the authoritative SQLite registry."""
+    dataRoot = tmp_path / "SageData"
+    database = SageDatabase(dataRoot / "database" / "sage.db")
+    ContextStateRepository(database, dataRoot)
+    preferencesPath = dataRoot / "context" / "preferences.md"
+    preferencesPath.write_text("manually injected value\n")
+    preferencesPath.chmod(0o644)
+
+    ContextStateRepository(database, dataRoot)
+
+    assert "manually injected value" not in preferencesPath.read_text()
+    assert "No confirmed records." in preferencesPath.read_text()
+    assert preferencesPath.stat().st_mode & 0o777 == 0o600
 
 
 def testSensitiveContextRequiresIndependentApproval(tmp_path):
@@ -76,6 +109,13 @@ def testSensitiveContextRequiresIndependentApproval(tmp_path):
 
     assert record["sensitivity"] == "SENSITIVE"
     assert repository.searchRecords("legal name")[0]["value"] == "Test User"
+    identityMirror = (dataRoot / "context" / "identity.md").read_text()
+    registryMirror = (dataRoot / "context" / "registry.md").read_text()
+    assert "legal-name" in identityMirror
+    assert record["id"] in identityMirror
+    assert "Value retained only in SQLite" in identityMirror
+    assert "Test User" not in identityMirror
+    assert "Test User" not in registryMirror
 
 
 def testForgetRequiresApprovalAndRedactsEveryStoredValue(tmp_path):
@@ -100,9 +140,9 @@ def testForgetRequiresApprovalAndRedactsEveryStoredValue(tmp_path):
     )
 
     assert repository.searchRecords("temporary") == []
-    assert not (
-        dataRoot / "context" / "preferences" / "temporary-preference.json"
-    ).exists()
+    assert "temporary-preference" not in (
+        dataRoot / "context" / "preferences.md"
+    ).read_text()
     with repository.database.connectDatabase() as connection:
         storedValues = connection.execute(
             """SELECT value FROM context_records WHERE id = ?

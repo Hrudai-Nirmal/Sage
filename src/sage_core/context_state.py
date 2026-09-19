@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 import re
@@ -35,6 +34,8 @@ class ContextStateRepository:
         self.contextRoot.mkdir(parents=True, exist_ok=True)
         self.contextRoot.chmod(0o700)
         self.auditStateRepository = AuditStateRepository(database)
+        with self.database.connectDatabase() as connection:
+            self._refreshMarkdownMirrors(connection)
 
     def upsertRecord(
         self,
@@ -80,6 +81,9 @@ class ContextStateRepository:
                 normalizedIdempotencyKey,
                 approvalRequestId,
             )
+            isReplay = bool(record.pop("_isReplay", False))
+            if not isReplay:
+                self._refreshMarkdownMirrors(connection)
         else:
             with self.database.connectDatabase() as ownedConnection:
                 record = self._upsertRecord(
@@ -94,9 +98,9 @@ class ContextStateRepository:
                     normalizedIdempotencyKey,
                     approvalRequestId,
                 )
-        isReplay = bool(record.pop("_isReplay", False))
-        if not isReplay:
-            self._writeManagedMirror(record)
+                isReplay = bool(record.pop("_isReplay", False))
+                if not isReplay:
+                    self._refreshMarkdownMirrors(ownedConnection)
         return record
 
     def forgetRecord(
@@ -121,6 +125,7 @@ class ContextStateRepository:
                 expectedVersion,
                 approvalRequestId,
             )
+            self._refreshMarkdownMirrors(connection)
         else:
             with self.database.connectDatabase() as ownedConnection:
                 forgottenRecord = self._forgetRecord(
@@ -130,9 +135,7 @@ class ContextStateRepository:
                     expectedVersion,
                     approvalRequestId,
                 )
-        self._getMirrorPath(
-            str(forgottenRecord["category"]), str(forgottenRecord["key"])
-        ).unlink(missing_ok=True)
+                self._refreshMarkdownMirrors(ownedConnection)
         return forgottenRecord
 
     def searchRecords(self, query: str = "", resultLimit: int = 20) -> list[dict[str, object]]:
@@ -417,20 +420,127 @@ class ContextStateRepository:
             "version": nextVersion,
         }
 
-    def _writeManagedMirror(self, record: dict[str, object]) -> None:
-        """Atomically refresh the human-inspectable managed JSON representation."""
-        mirrorPath = self._getMirrorPath(str(record["category"]), str(record["key"]))
-        mirrorPath.parent.mkdir(parents=True, exist_ok=True)
-        mirrorPath.parent.chmod(0o700)
-        mirrorDraftPath = mirrorPath.with_suffix(".json.pending")
-        mirrorDraftPath.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    def _refreshMarkdownMirrors(self, connection: sqlite3.Connection) -> None:
+        """Regenerate canonical Markdown views without leaking sensitive values."""
+        recordRows = connection.execute(
+            """SELECT id, category, record_key, value, sensitivity, version,
+                      source_type, source_ref, updated_at
+               FROM context_records WHERE status = 'ACTIVE'
+               ORDER BY category, record_key"""
+        ).fetchall()
+        records = [self._serializeRecord(recordRow) for recordRow in recordRows]
+        recordsByCategory = {
+            category: [record for record in records if record["category"] == category]
+            for category in CONTEXT_CATEGORIES
+        }
+        for category in sorted(CONTEXT_CATEGORIES):
+            self._writeMarkdownFile(
+                self.contextRoot / f"{category}.md",
+                self._buildCategoryMarkdown(category, recordsByCategory[category]),
+            )
+        self._writeMarkdownFile(
+            self.contextRoot / "registry.md", self._buildRegistryMarkdown(records)
+        )
+        self._removeLegacyJsonMirrors()
+
+    def _buildCategoryMarkdown(
+        self, category: str, records: list[dict[str, object]]
+    ) -> str:
+        """Render one category, including values only for ordinary context."""
+        categoryTitles = {
+            "education-work": "Education and Work",
+            "identity": "Identity",
+            "important-dates": "Important Dates",
+            "owned-items": "Owned Items",
+            "people": "People",
+            "preferences": "User Preferences",
+            "projects-commitments": "Projects and Commitments",
+            "user-rules": "User Rules",
+        }
+        lines = [
+            f"# {categoryTitles[category]}",
+            "",
+            "> This is a generated view. SQLite is authoritative; manual edits are ignored.",
+            "",
+        ]
+        if not records:
+            lines.extend(["No confirmed records.", ""])
+            return "\n".join(lines)
+        for record in records:
+            lines.extend(
+                [
+                    f"## {record['key']}",
+                    "",
+                    f"- Record ID: `{record['id']}`",
+                    f"- Version: {record['version']}",
+                    f"- Sensitivity: {record['sensitivity']}",
+                    f"- Source: `{record['sourceType']}` / `{record['sourceRef']}`",
+                    f"- Updated: {record['updatedAt']}",
+                ]
+            )
+            if record["sensitivity"] == "SENSITIVE":
+                lines.extend(["- Value retained only in SQLite.", ""])
+            else:
+                lines.extend(["", "### Value", ""])
+                lines.extend(
+                    f"> {valueLine}" if valueLine else ">"
+                    for valueLine in str(record["value"]).splitlines()
+                )
+                lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _buildRegistryMarkdown(records: list[dict[str, object]]) -> str:
+        """Render metadata for every active record without including any values."""
+        lines = [
+            "# Context Registry",
+            "",
+            "> This is a generated metadata index. SQLite is authoritative; values are omitted.",
+            "",
+            "| Record ID | Category | Key | Sensitivity | Version | Source | Updated |",
+            "| --- | --- | --- | --- | ---: | --- | --- |",
+        ]
+        for record in records:
+            cells = [
+                record["id"],
+                record["category"],
+                record["key"],
+                record["sensitivity"],
+                record["version"],
+                f"{record['sourceType']} / {record['sourceRef']}",
+                record["updatedAt"],
+            ]
+            escapedCells = [str(cell).replace("|", "\\|") for cell in cells]
+            lines.append("| " + " | ".join(escapedCells) + " |")
+        if not records:
+            lines.append("| — | — | — | — | — | — | — |")
+        lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _writeMarkdownFile(mirrorPath: Path, content: str) -> None:
+        """Atomically replace one private generated Markdown view."""
+        if mirrorPath.exists() and mirrorPath.read_text() == content:
+            mirrorPath.chmod(0o600)
+            return
+        mirrorDraftPath = mirrorPath.with_suffix(".md.pending")
+        mirrorDraftPath.write_text(content)
         mirrorDraftPath.chmod(0o600)
         mirrorDraftPath.replace(mirrorPath)
         mirrorPath.chmod(0o600)
 
-    def _getMirrorPath(self, category: str, recordKey: str) -> Path:
-        """Map already-validated identifiers to one managed path."""
-        return self.contextRoot / category / f"{recordKey}.json"
+    def _removeLegacyJsonMirrors(self) -> None:
+        """Remove obsolete generated JSON copies so sensitive values cannot linger."""
+        for category in CONTEXT_CATEGORIES:
+            legacyCategoryPath = self.contextRoot / category
+            if not legacyCategoryPath.is_dir():
+                continue
+            for legacyMirrorPath in legacyCategoryPath.glob("*.json"):
+                legacyMirrorPath.unlink(missing_ok=True)
+            try:
+                legacyCategoryPath.rmdir()
+            except OSError:
+                pass
 
     @staticmethod
     def _serializeRecord(recordRow: tuple[object, ...]) -> dict[str, object]:
