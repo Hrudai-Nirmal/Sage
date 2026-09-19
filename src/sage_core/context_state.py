@@ -138,6 +138,67 @@ class ContextStateRepository:
                 self._refreshMarkdownMirrors(ownedConnection)
         return forgottenRecord
 
+    def upsertApprovedRecords(
+        self,
+        records: list[dict[str, object]],
+        actor: str,
+        approvalRequestId: str,
+        connection: sqlite3.Connection,
+    ) -> list[dict[str, object]]:
+        """Apply a reviewed sensitive batch atomically and refresh views once."""
+        if not isinstance(records, list) or not 1 <= len(records) <= 100:
+            raise ValueError("Sensitive context batch must contain 1 to 100 records")
+        normalizedActor = self._validateText(actor, "actor", 200)
+        normalizedApprovalId = self._validateText(
+            approvalRequestId, "approvalRequestId", 100
+        )
+        normalizedRecords: list[tuple[str, str, str, str, str, int]] = []
+        seenTargets: set[tuple[str, str]] = set()
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("Every sensitive context batch item must be a record")
+            category, recordKey, value = self._validateRecord(
+                record.get("category"), record.get("recordKey"), record.get("value")
+            )
+            if category not in SENSITIVE_CONTEXT_CATEGORIES:
+                raise ValueError("Sensitive context batches cannot contain ordinary records")
+            target = (category, recordKey)
+            if target in seenTargets:
+                raise ValueError("Sensitive context batch contains a duplicate target")
+            seenTargets.add(target)
+            sourceType = self._validateText(
+                record.get("sourceType"), "sourceType", 100
+            )
+            sourceRef = self._validateText(record.get("sourceRef"), "sourceRef", 500)
+            expectedVersion = record.get("expectedVersion")
+            if isinstance(expectedVersion, bool) or not isinstance(expectedVersion, int):
+                raise ValueError("expectedVersion must be a non-negative integer")
+            if expectedVersion < 0:
+                raise ValueError("expectedVersion must be a non-negative integer")
+            normalizedRecords.append(
+                (category, recordKey, value, sourceType, sourceRef, expectedVersion)
+            )
+
+        storedRecords = [
+            self._upsertRecord(
+                connection,
+                category,
+                recordKey,
+                value,
+                sourceType,
+                sourceRef,
+                normalizedActor,
+                expectedVersion,
+                None,
+                normalizedApprovalId,
+            )
+            for category, recordKey, value, sourceType, sourceRef, expectedVersion in (
+                normalizedRecords
+            )
+        ]
+        self._refreshMarkdownMirrors(connection)
+        return storedRecords
+
     def searchRecords(self, query: str = "", resultLimit: int = 20) -> list[dict[str, object]]:
         """Search active confirmed records without returning forgotten values."""
         if not isinstance(query, str) or len(query) > 2_000:

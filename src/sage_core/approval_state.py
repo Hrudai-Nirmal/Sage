@@ -107,6 +107,7 @@ class ApprovalStateRepository:
                 "FORGET_CONTEXT_RECORD",
                 "SEND_GMAIL_MESSAGE",
                 "UPSERT_CONTEXT_RECORD",
+                "UPSERT_CONTEXT_RECORDS",
             }
             if actionType not in supportedActions or status != "PENDING":
                 raise ValueError("Approval request cannot be fulfilled")
@@ -205,6 +206,13 @@ class ApprovalStateRepository:
                     actor=approvedBy,
                     hasSensitiveApproval=True,
                     expectedVersion=int(taskPayload["expectedVersion"]),
+                    approvalRequestId=approvalId,
+                    connection=connection,
+                )
+            elif actionType == "UPSERT_CONTEXT_RECORDS":
+                self.contextStateRepository.upsertApprovedRecords(
+                    records=list(taskPayload["records"]),
+                    actor=approvedBy,
                     approvalRequestId=approvalId,
                     connection=connection,
                 )

@@ -80,6 +80,65 @@ def testContextApiSeparatesStandardWritesFromSensitiveApprovals(tmp_path):
     assert revisionResponse.json()[0]["sourceRef"] == "telegram:201"
 
 
+def testSensitiveContextBatchUsesOneAtomicApproval(tmp_path):
+    """One reviewed button can store distinct sensitive facts without merging records."""
+    dataRoot = tmp_path / "SageData"
+    app = createApp(
+        databasePath=dataRoot / "database" / "sage.db",
+        dataRoot=dataRoot,
+        proposalToken="proposal-token",
+        approvalToken="approval-token",
+    )
+    proposalHeaders = {"X-Sage-Proposal-Token": "proposal-token"}
+    approvalHeaders = {"X-Sage-Approval-Token": "approval-token"}
+    records = [
+        {
+            "category": "identity",
+            "expectedVersion": 0,
+            "recordKey": "preferred-name",
+            "sourceRef": "operator:profile-seed",
+            "sourceType": "operator-explicit",
+            "value": "Test User",
+        },
+        {
+            "category": "people",
+            "expectedVersion": 0,
+            "recordKey": "sibling",
+            "sourceRef": "operator:profile-seed",
+            "sourceType": "operator-explicit",
+            "value": "Test Sibling",
+        },
+    ]
+
+    with TestClient(app) as client:
+        proposalResponse = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={
+                "actionType": "UPSERT_CONTEXT_RECORDS",
+                "idempotencyKey": "operator:profile-seed:sensitive",
+                "payload": {"records": records},
+            },
+        )
+        beforeApproval = client.get("/v1/context/records").json()
+        confirmationResponse = client.post(
+            f"/v1/approval-requests/{proposalResponse.json()['id']}/confirm",
+            headers=approvalHeaders,
+            json={"approvedBy": "telegram-user:8961856168"},
+        )
+        afterApproval = client.get("/v1/context/records").json()
+
+    assert proposalResponse.status_code == 201
+    assert beforeApproval == []
+    assert confirmationResponse.json()["status"] == "APPROVED"
+    assert {(record["category"], record["key"]) for record in afterApproval} == {
+        ("identity", "preferred-name"),
+        ("people", "sibling"),
+    }
+    assert "Test User" not in (dataRoot / "context" / "identity.md").read_text()
+    assert "Test Sibling" not in (dataRoot / "context" / "people.md").read_text()
+
+
 def testForgettingContextIsApprovalGatedAndRedactsTheRecord(tmp_path):
     """No direct endpoint can erase context; approval targets one exact record version."""
     dataRoot = tmp_path / "SageData"

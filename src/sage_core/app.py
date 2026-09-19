@@ -225,6 +225,20 @@ class ContextUpsertApprovalRequestPayload(BaseModel):
     payload: ContextUpsertProposalPayload
 
 
+class ContextBatchUpsertProposalPayload(BaseModel):
+    """Validate a bounded set of sensitive records reviewed as one operation."""
+
+    records: list[ContextUpsertProposalPayload] = Field(min_length=1, max_length=100)
+
+
+class ContextBatchUpsertApprovalRequestPayload(BaseModel):
+    """Require one independent confirmation for an atomic sensitive-context batch."""
+
+    actionType: Literal["UPSERT_CONTEXT_RECORDS"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    payload: ContextBatchUpsertProposalPayload
+
+
 class ContextForgetProposalPayload(BaseModel):
     """Bind a forget request to one exact active context version."""
 
@@ -439,6 +453,7 @@ def createApp(
             | GmailSendApprovalRequestPayload
             | CalendarDeleteApprovalRequestPayload
             | ContextUpsertApprovalRequestPayload
+            | ContextBatchUpsertApprovalRequestPayload
             | ContextForgetApprovalRequestPayload
         ),
         sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
