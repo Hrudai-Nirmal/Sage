@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, model_validator
 
 from sage_core.approval_state import ApprovalStateRepository
+from sage_core.context_state import ContextStateRepository
 from sage_core.database import SageDatabase
 from sage_core.document_state import DocumentStateRepository
 from sage_core.email_draft_state import EmailDraftStateRepository
@@ -190,6 +191,57 @@ class DocumentImportPayload(BaseModel):
     sourceRoot: str = Field(min_length=1, max_length=100)
 
 
+class ContextRecordCreatePayload(BaseModel):
+    """Validate one explicit ordinary context write from a constrained channel."""
+
+    category: Literal[
+        "education-work",
+        "identity",
+        "important-dates",
+        "owned-items",
+        "people",
+        "preferences",
+        "projects-commitments",
+        "user-rules",
+    ]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    recordKey: str = Field(min_length=1, max_length=120, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    sourceRef: str = Field(min_length=1, max_length=500)
+    sourceType: Literal["operator-explicit", "telegram-explicit"]
+    value: str = Field(min_length=1, max_length=10_000)
+
+
+class ContextUpsertProposalPayload(ContextRecordCreatePayload):
+    """Bind a sensitive context proposal to the version reviewed by the user."""
+
+    expectedVersion: int = Field(ge=0)
+
+
+class ContextUpsertApprovalRequestPayload(BaseModel):
+    """Require independent approval for identity and other sensitive context."""
+
+    actionType: Literal["UPSERT_CONTEXT_RECORD"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    payload: ContextUpsertProposalPayload
+
+
+class ContextForgetProposalPayload(BaseModel):
+    """Bind a forget request to one exact active context version."""
+
+    category: str = Field(min_length=1, max_length=100)
+    expectedVersion: int = Field(ge=1)
+    recordId: str = Field(min_length=1, max_length=100)
+    recordKey: str = Field(min_length=1, max_length=120)
+
+
+class ContextForgetApprovalRequestPayload(BaseModel):
+    """Require independent approval before redacting any retained context."""
+
+    actionType: Literal["FORGET_CONTEXT_RECORD"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    payload: ContextForgetProposalPayload
+
+
 class TelegramAttachmentPayload(BaseModel):
     """Validate bounded Telegram metadata before the host downloads an attachment."""
 
@@ -314,7 +366,8 @@ def createApp(
 
     managedDataRoot = dataRoot or databasePath.parent.parent
     database = SageDatabase(databasePath)
-    approvalStateRepository = ApprovalStateRepository(database)
+    approvalStateRepository = ApprovalStateRepository(database, managedDataRoot)
+    contextStateRepository = ContextStateRepository(database, managedDataRoot)
     emailDraftStateRepository = EmailDraftStateRepository(database)
     documentStateRepository = DocumentStateRepository(
         database=database,
@@ -385,6 +438,8 @@ def createApp(
             | DriveDeleteApprovalRequestPayload
             | GmailSendApprovalRequestPayload
             | CalendarDeleteApprovalRequestPayload
+            | ContextUpsertApprovalRequestPayload
+            | ContextForgetApprovalRequestPayload
         ),
         sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
     ) -> dict[str, str]:
@@ -491,6 +546,49 @@ def createApp(
     def listTasks() -> list[dict[str, str | None]]:
         """List only tasks already materialized through the approval path."""
         return approvalStateRepository.listTasks()
+
+    @app.post("/v1/context/records", status_code=status.HTTP_201_CREATED)
+    def createContextRecord(
+        contextRecord: ContextRecordCreatePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Store one explicitly requested ordinary record; sensitive writes fail closed."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return contextStateRepository.upsertRecord(
+                category=contextRecord.category,
+                recordKey=contextRecord.recordKey,
+                value=contextRecord.value,
+                sourceType=contextRecord.sourceType,
+                sourceRef=contextRecord.sourceRef,
+                actor="sage-proposal-channel",
+                idempotencyKey=contextRecord.idempotencyKey,
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.get("/v1/context/records")
+    def searchContextRecords(query: str = "", resultLimit: int = 20) -> list[dict[str, object]]:
+        """Search only active confirmed context for Telegram and the operator interface."""
+        try:
+            return contextStateRepository.searchRecords(query, resultLimit)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+    @app.get("/v1/context/records/{recordId}")
+    def getContextRecord(recordId: str) -> dict[str, object]:
+        """Resolve one exact active record before a correction or forget proposal."""
+        try:
+            return contextStateRepository.getRecord(recordId)
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+    @app.get("/v1/context/records/{recordId}/revisions")
+    def listContextRevisions(recordId: str) -> list[dict[str, object]]:
+        """Expose a bounded local provenance trail for user review."""
+        return contextStateRepository.listRevisions(recordId)
 
     @app.get("/v1/cases")
     def listCases() -> list[dict[str, str]]:

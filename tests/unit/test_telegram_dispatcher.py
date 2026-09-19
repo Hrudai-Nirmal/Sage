@@ -747,6 +747,141 @@ def testFalseCapabilityDenialFallsBackToGroundedToolEvidence(monkeypatch):
     assert "cannot access" not in reply
 
 
+def testParsesExplicitContextCommandsWithoutGuessingFields():
+    """Telegram offers deterministic inspect, remember, correct, and forget operations."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramContextCommands", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    assert dispatcher.getContextCommand("/context language") == {
+        "action": "SEARCH",
+        "query": "language",
+    }
+    assert dispatcher.getContextCommand(
+        "/remember preferences | default-language | English"
+    ) == {
+        "action": "REMEMBER",
+        "category": "preferences",
+        "recordKey": "default-language",
+        "value": "English",
+    }
+    assert dispatcher.getContextCommand("/correct record-1 | Updated") == {
+        "action": "CORRECT",
+        "recordId": "record-1",
+        "value": "Updated",
+    }
+    assert dispatcher.getContextCommand("/forget record-1") == {
+        "action": "FORGET",
+        "recordId": "record-1",
+    }
+    assert dispatcher.getContextCommand("/remember preferences | missing value") is None
+
+
+def testContextToolUsesDirectStandardWriteAndApprovalForSensitiveWrite(monkeypatch):
+    """The executor, not the model, chooses the context authority path by category."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramContextTools", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    postedPayloads = []
+    approvalCalls = []
+
+    def fakePostJson(url, payload, headers):
+        postedPayloads.append((url, payload, headers))
+        return {
+            "category": payload["category"],
+            "id": "context-1",
+            "key": payload["recordKey"],
+            "sensitivity": "STANDARD",
+            "sourceRef": payload["sourceRef"],
+            "sourceType": payload["sourceType"],
+            "updatedAt": "2026-09-19T00:00:00+00:00",
+            "value": payload["value"],
+            "version": 1,
+        }
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(
+        dispatcher,
+        "getContextVersion",
+        lambda category, recordKey: 0,
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "sendApprovalRequest",
+        lambda secrets, actionType, payload, label, idempotencyKey="": approvalCalls.append(
+            (actionType, payload, label, idempotencyKey)
+        ) or "Approval card sent.",
+    )
+
+    standardResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "remember_context",
+        '{"category":"preferences","recordKey":"language","value":"English"}',
+        "Remember that my language is English",
+        "telegram:301",
+    )
+    sensitiveResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "remember_context",
+        '{"category":"identity","recordKey":"legal-name","value":"Test User"}',
+        "Remember that my legal name is Test User",
+        "telegram:302",
+    )
+
+    assert standardResult["status"] == "COMPLETE"
+    assert postedPayloads[0][1]["sourceRef"] == "telegram:301"
+    assert sensitiveResult == {
+        "status": "PENDING_APPROVAL",
+        "result": "Approval card sent.",
+    }
+    assert approvalCalls[0][0] == "UPSERT_CONTEXT_RECORD"
+    assert approvalCalls[0][1]["expectedVersion"] == 0
+
+
+def testConfirmedContextIsInjectedIntoEveryOrdinaryModelTurn(tmp_path, monkeypatch):
+    """Context relevance is deterministic and does not depend on the model remembering it."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramContextPrompt", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    dataRoot = tmp_path / "SageData"
+    databasePath = dataRoot / "database" / "sage.db"
+    monkeypatch.setattr(dispatcher, "DATA_ROOT", dataRoot)
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+    repository = dispatcher.ContextStateRepository(
+        dispatcher.SageDatabase(databasePath), dataRoot
+    )
+    repository.upsertRecord(
+        category="preferences",
+        recordKey="default-language",
+        value="English",
+        sourceType="telegram-explicit",
+        sourceRef="telegram:303",
+        actor="telegram-user:8961856168",
+    )
+    modelPayloads = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        return {"choices": [{"message": {"content": "Hello"}}]}
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+
+    dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "What language should you use?"}],
+        "What language should you use?",
+    )
+
+    assert "Confirmed personal context" in modelPayloads[0]["messages"][0]["content"]
+    assert "default-language: English" in modelPayloads[0]["messages"][0]["content"]
+
+
 def testToolAwareConversationCanSearchThenMutateAnExactCalendarEvent(monkeypatch):
     """A second bounded tool round can use a search result's exact Calendar event ID."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"

@@ -17,6 +17,9 @@ def testSagePromptEncodesAuthorityAndResearchBoundaries():
     assert "untrusted evidence" in prompt
     assert "Do not reveal" in prompt
     assert "numbered citations" in prompt
+    assert "confirmed personal context" in prompt
+    assert "`/remember" in prompt
+    assert "Forgetting any context" in prompt
 
 
 def testIrisPromptLimitsVisionWorkerAuthority():

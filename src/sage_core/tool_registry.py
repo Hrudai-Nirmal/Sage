@@ -6,6 +6,8 @@ import json
 from datetime import datetime
 import re
 
+from sage_core.context_state import CONTEXT_CATEGORIES, CONTEXT_KEY_PATTERN
+
 
 ACCOUNT_KEYS = {"personal-work", "work", "personal", "college"}
 
@@ -81,6 +83,59 @@ def getToolDefinitions() -> list[dict[str, object]]:
                 "description": "Search files already copied into Sage's managed document registry.",
                 "parameters": _objectSchema(
                     {"query": {"type": "string", "maxLength": 2000}}, ["query"]
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_context",
+                "description": (
+                    "Search only the user's confirmed personal context registry. "
+                    "Never treat an unconfirmed conversation inference as stored context."
+                ),
+                "parameters": _objectSchema(
+                    {"query": {"type": "string", "maxLength": 2000}}, ["query"]
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remember_context",
+                "description": (
+                    "Record one fact only when the user explicitly asks Sage to remember, save, "
+                    "store, or note it. Sensitive categories always create an approval card."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "category": {
+                            "type": "string",
+                            "enum": sorted(CONTEXT_CATEGORIES),
+                        },
+                        "recordKey": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120,
+                            "pattern": r"^[a-z0-9][a-z0-9._-]*$",
+                        },
+                        "value": {"type": "string", "minLength": 1, "maxLength": 10000},
+                    },
+                    ["category", "recordKey", "value"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "forget_context",
+                "description": (
+                    "Propose forgetting one exact confirmed context record after the user "
+                    "explicitly asks. Redaction always requires independent approval."
+                ),
+                "parameters": _objectSchema(
+                    {"recordId": {"type": "string", "minLength": 1, "maxLength": 100}},
+                    ["recordId"],
                 ),
             },
         },
@@ -336,6 +391,30 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
         ):
             raise ValueError("Download import requires a safe relative path")
         return {"relativePath": relativePath.strip()}
+
+    if toolName == "remember_context":
+        _rejectUnknownKeys(arguments, {"category", "recordKey", "value"})
+        category = arguments.get("category")
+        recordKey = arguments.get("recordKey")
+        value = arguments.get("value")
+        if category not in CONTEXT_CATEGORIES:
+            raise ValueError("Context category is not supported")
+        if not isinstance(recordKey, str) or CONTEXT_KEY_PATTERN.fullmatch(recordKey) is None:
+            raise ValueError("Context key must be a lowercase safe identifier")
+        if not isinstance(value, str) or not value.strip() or len(value) > 10_000:
+            raise ValueError("Context value must be between 1 and 10000 characters")
+        return {
+            "category": str(category),
+            "recordKey": recordKey,
+            "value": value.strip(),
+        }
+
+    if toolName == "forget_context":
+        _rejectUnknownKeys(arguments, {"recordId"})
+        recordId = arguments.get("recordId")
+        if not isinstance(recordId, str) or not recordId.strip() or len(recordId) > 100:
+            raise ValueError("Context record ID is invalid")
+        return {"recordId": recordId.strip()}
 
     if toolName in {
         "draft_gmail_message",

@@ -10,6 +10,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Versioned role contracts in `prompts/` define Sage's user-facing authority and Iris's restricted background-analysis role. The dispatcher loads Sage's prompt for every model call.
 - Ordinary Telegram conversation uses a closed capability registry. Sage may select only implemented Gmail, Calendar, and Drive tools; deterministic validation and policy code executes each call, and the model receives the bounded result for its final answer.
 - A code-owned capability broker injects Sage's complete configured ability and authority manifest into every model turn. It permits automatic inference of one read-only source, asks when multiple sources are named, retries only technical failures on retry-safe operations at most three times, and blocks model claims that configured integrations do not exist.
+- Confirmed personal context is stored in a typed, provenance-aware registry with immutable revisions and private JSON mirrors under `SageData/context`. Relevant confirmed records are injected into every Sage model turn; conversation guesses are never silently promoted to memory.
 - Telegram images and image/PDF documents are bounded at 20 MB, inspected by Iris, synthesized by Sage, and removed from temporary storage after each request.
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
@@ -79,6 +80,15 @@ Ordinary chat also supports explicit Google actions with complete details:
 - The local operator dashboard shows pending Google outbox stages and retry counts without exposing email bodies.
 
 Document handling is also available through ordinary Telegram phrasing. Sage can search filename metadata in the allowlisted `/Users/hrudainirmal/Downloads` tree, search its managed document registry, and copy one exact requested Downloads file into `/Users/hrudainirmal/SageData/documents/general`. It skips symlinks, rejects absolute and parent-traversal paths, never modifies the source, deduplicates imported content by SHA-256, and returns only the managed document ID/name/checksum to the model.
+
+Personal context is available through ordinary explicit requests and deterministic commands:
+
+- `/context [terms]` lists matching confirmed records with the exact ID and version needed for later changes.
+- `/remember <category> | <key> | <value>` creates or revises a record. `preferences`, `projects-commitments`, and `user-rules` are ordinary records. `identity`, `people`, `education-work`, `owned-items`, and `important-dates` always produce an approval card.
+- `/correct <record-id> | <new-value>` revises the exact record. Sensitive corrections remain approval-gated.
+- `/forget <record-id>` always creates an approval card. Approval removes the managed JSON file and redacts the value from both the active row and its retained revisions.
+
+Sage can search confirmed context automatically and receives a bounded relevant-context block for ordinary chat, research synthesis, attachment synthesis, and scheduled reports. Explicit writes are replay-safe, every revision keeps its source and actor, stale approvals cannot overwrite a newer record, and the local operator dashboard exposes the active registry for review. If Sage merely thinks something may be worth remembering, it must suggest an exact `/remember` command instead of persisting the inference.
 
 Gmail polling never marks email read or changes labels/archives; outbound mail runs only through the separately approved outbox. Clear security, billing, placement, and deadline messages can trigger Notifications; suggested tasks remain approval-gated. Calendar creates deterministic reminders 10 minutes before timed events. Drive is never monitored in the background.
 

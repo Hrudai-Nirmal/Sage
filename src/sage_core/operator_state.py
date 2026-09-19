@@ -24,6 +24,7 @@ class OperatorStateRepository:
             "cases": "SELECT COUNT(*) FROM cases WHERE status = 'ACTIVE'",
             "calendarEvents": "SELECT COUNT(*) FROM calendar_events",
             "calendarReminders": "SELECT COUNT(*) FROM calendar_reminders WHERE status = 'PENDING'",
+            "contextRecords": "SELECT COUNT(*) FROM context_records WHERE status = 'ACTIVE'",
             "documents": "SELECT COUNT(*) FROM documents",
             "driveFiles": "SELECT COUNT(*) FROM drive_files",
             "emailDrafts": "SELECT COUNT(*) FROM email_drafts WHERE status NOT IN ('SENT', 'CANCELLED', 'SUPERSEDED')",
@@ -77,6 +78,12 @@ class OperatorStateRepository:
                 """SELECT text, due_at, status FROM calendar_reminders
                    ORDER BY due_at LIMIT 20"""
             ).fetchall()
+            contextRows = connection.execute(
+                """SELECT category, record_key, value, sensitivity, source_type,
+                          updated_at, version
+                   FROM context_records WHERE status = 'ACTIVE'
+                   ORDER BY updated_at DESC LIMIT 20"""
+            ).fetchall()
             googleActionRows = connection.execute(
                 """SELECT action_type, account_key, stage, status, attempts
                    FROM google_actions ORDER BY next_attempt_at LIMIT 20"""
@@ -127,6 +134,19 @@ class OperatorStateRepository:
             "calendarReminders": [
                 {"dueAt": dueAt, "status": reminderStatus, "text": reminderText}
                 for reminderText, dueAt, reminderStatus in reminderRows
+            ],
+            "contextRecords": [
+                {
+                    "category": category,
+                    "key": recordKey,
+                    "sensitivity": sensitivity,
+                    "sourceType": sourceType,
+                    "updatedAt": updatedAt,
+                    "value": str(value)[:1_000],
+                    "version": version,
+                }
+                for category, recordKey, value, sensitivity, sourceType, updatedAt, version
+                in contextRows
             ],
             "documents": [
                 {"importedAt": importedAt, "name": canonicalName, "originalName": originalName}

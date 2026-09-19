@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 from sage_core.audit_state import AuditStateRepository
+from sage_core.context_state import ContextStateRepository
 from sage_core.database import SageDatabase
 from sage_core.email_draft_state import EmailDraftStateRepository
 
@@ -14,10 +16,13 @@ from sage_core.email_draft_state import EmailDraftStateRepository
 class ApprovalStateRepository:
     """Create and resolve approval records within one atomic SQLite transaction."""
 
-    def __init__(self, database: SageDatabase) -> None:
+    def __init__(self, database: SageDatabase, dataRoot: Path | None = None) -> None:
         """Use the shared Sage database for approval and task state."""
         self.database = database
         self.auditStateRepository = AuditStateRepository(database)
+        self.contextStateRepository = ContextStateRepository(
+            database, dataRoot or database.databasePath.parent.parent
+        )
         self.emailDraftStateRepository = EmailDraftStateRepository(database)
 
     def createProposal(
@@ -99,7 +104,9 @@ class ApprovalStateRepository:
                 "CREATE_SCHEDULE",
                 "DELETE_CALENDAR_EVENT",
                 "DELETE_DRIVE_FILE",
+                "FORGET_CONTEXT_RECORD",
                 "SEND_GMAIL_MESSAGE",
+                "UPSERT_CONTEXT_RECORD",
             }
             if actionType not in supportedActions or status != "PENDING":
                 raise ValueError("Approval request cannot be fulfilled")
@@ -187,6 +194,28 @@ class ApprovalStateRepository:
                         datetime.now(UTC).isoformat(),
                         approvalId,
                     ),
+                )
+            elif actionType == "UPSERT_CONTEXT_RECORD":
+                self.contextStateRepository.upsertRecord(
+                    category=str(taskPayload["category"]),
+                    recordKey=str(taskPayload["recordKey"]),
+                    value=str(taskPayload["value"]),
+                    sourceType=str(taskPayload["sourceType"]),
+                    sourceRef=str(taskPayload["sourceRef"]),
+                    actor=approvedBy,
+                    hasSensitiveApproval=True,
+                    expectedVersion=int(taskPayload["expectedVersion"]),
+                    approvalRequestId=approvalId,
+                    connection=connection,
+                )
+            elif actionType == "FORGET_CONTEXT_RECORD":
+                self.contextStateRepository.forgetRecord(
+                    recordId=str(taskPayload["recordId"]),
+                    actor=approvedBy,
+                    hasApproval=True,
+                    expectedVersion=int(taskPayload["expectedVersion"]),
+                    approvalRequestId=approvalId,
+                    connection=connection,
                 )
             else:
                 actionStage = "CREATE_DRAFT" if actionType == "SEND_GMAIL_MESSAGE" else "EXECUTE"

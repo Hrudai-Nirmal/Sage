@@ -90,6 +90,39 @@ class SageDatabase:
                     imported_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS context_records (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    record_key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    sensitivity TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_ref TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    approval_request_id TEXT,
+                    UNIQUE(category, record_key),
+                    FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS context_revisions (
+                    id TEXT PRIMARY KEY,
+                    context_record_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    value TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_ref TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    approval_request_id TEXT,
+                    idempotency_key TEXT,
+                    UNIQUE(context_record_id, version),
+                    FOREIGN KEY (context_record_id) REFERENCES context_records(id),
+                    FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS research_runs (
                     id TEXT PRIMARY KEY,
                     query TEXT NOT NULL,
@@ -277,6 +310,7 @@ class SageDatabase:
             self._addTelegramColumnIfMissing(connection, "attachment_json", "TEXT")
             self._addApprovalColumnIfMissing(connection, "idempotency_key", "TEXT")
             self._addEmailDraftColumnIfMissing(connection, "idempotency_key", "TEXT")
+            self._addContextRevisionColumnIfMissing(connection, "idempotency_key", "TEXT")
             connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS approval_requests_idempotency_key
                    ON approval_requests(idempotency_key) WHERE idempotency_key IS NOT NULL"""
@@ -284,6 +318,10 @@ class SageDatabase:
             connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS email_drafts_idempotency_key
                    ON email_drafts(idempotency_key) WHERE idempotency_key IS NOT NULL"""
+            )
+            connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS context_revisions_idempotency_key
+                   ON context_revisions(idempotency_key) WHERE idempotency_key IS NOT NULL"""
             )
 
     def _addTaskColumnIfMissing(
@@ -332,4 +370,19 @@ class SageDatabase:
         if columnName not in draftColumns:
             connection.execute(
                 f"ALTER TABLE email_drafts ADD COLUMN {columnName} {columnDefinition}"
+            )
+
+    def _addContextRevisionColumnIfMissing(
+        self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
+    ) -> None:
+        """Add context replay protection without discarding personal revision history."""
+        revisionColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute(
+                "PRAGMA table_info(context_revisions)"
+            ).fetchall()
+        }
+        if columnName not in revisionColumns:
+            connection.execute(
+                f"ALTER TABLE context_revisions ADD COLUMN {columnName} {columnDefinition}"
             )

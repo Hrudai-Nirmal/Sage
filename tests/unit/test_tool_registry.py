@@ -21,7 +21,10 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "request_gmail_approval",
         "revise_gmail_draft",
         "import_download_file",
+        "forget_context",
+        "remember_context",
         "search_calendar",
+        "search_context",
         "search_documents",
         "search_downloads",
         "search_drive",
@@ -62,6 +65,35 @@ def testValidatesCopyOnlyDownloadImportPath():
         validateToolArguments("import_download_file", '{"relativePath":"../secret.txt"}')
     with pytest.raises(ValueError, match="relative"):
         validateToolArguments("import_download_file", '{"relativePath":"/etc/passwd"}')
+
+
+def testValidatesPersonalContextTools():
+    """Model-selected context operations stay inside fixed categories and safe identifiers."""
+    assert validateToolArguments(
+        "remember_context",
+        '{"category":"preferences","recordKey":"default-language","value":"English"}',
+    ) == {
+        "category": "preferences",
+        "recordKey": "default-language",
+        "value": "English",
+    }
+    assert validateToolArguments("search_context", '{"query":"language"}') == {
+        "query": "language"
+    }
+    assert validateToolArguments(
+        "forget_context", '{"recordId":"8c632bdd-e469-4b1a-a176-1f7a9cbd9a48"}'
+    ) == {"recordId": "8c632bdd-e469-4b1a-a176-1f7a9cbd9a48"}
+
+    with pytest.raises(ValueError, match="category"):
+        validateToolArguments(
+            "remember_context",
+            '{"category":"secrets","recordKey":"token","value":"hidden"}',
+        )
+    with pytest.raises(ValueError, match="key"):
+        validateToolArguments(
+            "remember_context",
+            '{"category":"preferences","recordKey":"../escape","value":"bad"}',
+        )
 
 
 def testValidatesGmailSendAndCalendarMutationArguments():
