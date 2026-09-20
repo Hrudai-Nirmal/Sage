@@ -31,6 +31,15 @@ services:
     environment:
       GENERIC_TIMEZONE: ${TZ:-Asia/Kolkata}
       # The local poller reads only its private runtime values; no secret is versioned in workflows.
+      EXECUTIONS_DATA_HARD_DELETE_BUFFER: "0"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL: "1"
+      EXECUTIONS_DATA_PRUNE_MAX_COUNT: "1000"
+      EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL: "1"
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "false"
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"

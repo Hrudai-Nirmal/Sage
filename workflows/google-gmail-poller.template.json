@@ -61,6 +61,7 @@
       "name": "List Calendar personal-work",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         240,
         800
@@ -102,6 +103,10 @@
       "name": "Index Calendar in Sage Core",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "position": [
         1240,
         800
@@ -142,6 +147,7 @@
       "name": "List Gmail personal-work",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         240,
         0
@@ -187,6 +193,7 @@
       "name": "Get Gmail personal-work",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         720,
         0
@@ -240,6 +247,7 @@
       "name": "List Gmail work",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         240,
         200
@@ -285,6 +293,7 @@
       "name": "Get Gmail work",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         720,
         200
@@ -338,6 +347,7 @@
       "name": "List Gmail personal",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         240,
         400
@@ -383,6 +393,7 @@
       "name": "Get Gmail personal",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         720,
         400
@@ -436,6 +447,7 @@
       "name": "List Gmail college",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         240,
         600
@@ -481,6 +493,7 @@
       "name": "Get Gmail college",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
       "position": [
         720,
         600
@@ -522,6 +535,10 @@
       "name": "Index in Sage Core",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "position": [
         1240,
         300

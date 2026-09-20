@@ -57,6 +57,45 @@ def testGmailPollerOnlyIndexesAndNeverChangesRemoteMail():
     assert "SAGE_GOOGLE_INGRESS_TOKEN" in json.dumps(forwardNode)
 
 
+def testGooglePollerIsolatesAccountAndDeliveryFailures():
+    """One expired OAuth credential cannot stop the other mailbox branches."""
+    workflowPath = Path(__file__).parents[2] / "workflows" / "google-gmail-poller.template.json"
+    workflow = json.loads(workflowPath.read_text())
+    remoteNodes = [
+        node
+        for node in workflow["nodes"]
+        if node["name"].startswith(("List Gmail ", "Get Gmail "))
+        or node["name"] == "List Calendar personal-work"
+    ]
+    deliveryNodes = [
+        node
+        for node in workflow["nodes"]
+        if node["name"] in {"Index in Sage Core", "Index Calendar in Sage Core"}
+    ]
+
+    assert len(remoteNodes) == 9
+    assert all(node["onError"] == "continueErrorOutput" for node in remoteNodes)
+    assert len(deliveryNodes) == 2
+    assert all(node["onError"] == "continueErrorOutput" for node in deliveryNodes)
+    assert all(node["retryOnFail"] is True for node in deliveryNodes)
+    assert all(node["maxTries"] == 3 for node in deliveryNodes)
+
+
+def testN8nRetainsFailuresWithoutPersistingSuccessfulPollPayloads():
+    """Frequent poll successes cannot grow n8n's local execution database indefinitely."""
+    composeText = (Path(__file__).parents[2] / "docker-compose.yml").read_text()
+
+    assert 'EXECUTIONS_DATA_PRUNE: "true"' in composeText
+    assert 'EXECUTIONS_DATA_HARD_DELETE_BUFFER: "0"' in composeText
+    assert 'EXECUTIONS_DATA_MAX_AGE: "168"' in composeText
+    assert 'EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL: "1"' in composeText
+    assert 'EXECUTIONS_DATA_PRUNE_MAX_COUNT: "1000"' in composeText
+    assert 'EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL: "1"' in composeText
+    assert 'EXECUTIONS_DATA_SAVE_ON_ERROR: all' in composeText
+    assert 'EXECUTIONS_DATA_SAVE_ON_SUCCESS: none' in composeText
+    assert 'EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "false"' in composeText
+
+
 def testGooglePollerReadsOneCalendarEveryThirtyMinutesAndNeverPollsDrive():
     """Calendar is limited to personal-work and Drive remains strictly on demand."""
     workflowPath = Path(__file__).parents[2] / "workflows" / "google-gmail-poller.template.json"
