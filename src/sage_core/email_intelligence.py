@@ -5,6 +5,7 @@ from __future__ import annotations
 
 def classifyEmail(emailMessage: dict[str, object]) -> dict[str, object]:
     """Return a conservative rule-backed alert and optional task suggestion."""
+    accountKey = str(emailMessage.get("accountKey", "")).strip()
     sender = str(emailMessage.get("sender", "")).strip()
     subject = str(emailMessage.get("subject", "")).strip()
     snippet = str(emailMessage.get("snippet", "")).strip()
@@ -17,6 +18,9 @@ def classifyEmail(emailMessage: dict[str, object]) -> dict[str, object]:
         "PLACEMENT": (
             "placement",
             "campus recruitment",
+            "campus hiring",
+            "career development centre",
+            "training and placement",
             "application status",
             "interview scheduled",
             "shortlisted",
@@ -44,9 +48,10 @@ def classifyEmail(emailMessage: dict[str, object]) -> dict[str, object]:
     sourceLabel = sender or "Unknown sender"
     subjectLabel = subject or "(no subject)"
     contentPreview = snippet or bodyText
+    accountLine = f"Account: {accountKey}\n" if accountKey else ""
     notificationText = (
         f"Important email [{category}]\n{subjectLabel}\nFrom: {sourceLabel}\n"
-        f"{contentPreview[:700]}"
+        f"{accountLine}{contentPreview[:700]}"
     )
     hasExplicitAction = any(
         signal in searchableText

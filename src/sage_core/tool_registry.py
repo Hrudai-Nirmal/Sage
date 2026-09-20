@@ -105,7 +105,8 @@ def getToolDefinitions() -> list[dict[str, object]]:
                 "name": "remember_context",
                 "description": (
                     "Record one fact only when the user explicitly asks Sage to remember, save, "
-                    "store, or note it. Sensitive categories always create an approval card."
+                    "store, or note it, or gives an explicit standing instruction such as "
+                    "'always' or 'from now on'. Sensitive categories always create an approval card."
                 ),
                 "parameters": _objectSchema(
                     {

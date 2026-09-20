@@ -20,6 +20,7 @@ def testSagePromptEncodesAuthorityAndResearchBoundaries():
     assert "confirmed personal context" in prompt
     assert "`/remember" in prompt
     assert "Forgetting any context" in prompt
+    assert "standing instruction" in prompt
 
 
 def testIrisPromptLimitsVisionWorkerAuthority():

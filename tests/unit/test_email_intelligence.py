@@ -46,3 +46,19 @@ def testIgnoresGenericInterviewContentWithoutPlacementSignal():
     })
 
     assert classification["shouldNotify"] is False
+
+
+def testPlacementOfficeTimingUpdateIncludesTheGmailAccount():
+    """Career-office logistics are urgent and identify which connected inbox received them."""
+    classification = classifyEmail({
+        "accountKey": "college",
+        "sender": "Career Development Centre <cdc@example.edu>",
+        "subject": "Interview timing and venue update",
+        "snippet": "Report to Seminar Hall 2 at 9:00 AM tomorrow.",
+        "bodyText": "The selection process begins at the updated venue.",
+    })
+
+    assert classification["category"] == "PLACEMENT"
+    assert classification["shouldNotify"] is True
+    assert "Account: college" in classification["notificationText"]
+    assert "timing and venue" in classification["notificationText"]

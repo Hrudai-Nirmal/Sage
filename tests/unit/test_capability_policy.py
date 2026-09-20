@@ -42,6 +42,8 @@ def testAwarenessPromptStatesConfiguredAbilitiesAndAuthority():
 
     assert "gmail.search" in prompt
     assert "four connected Gmail accounts" in prompt
+    assert "gmail.monitor_important" in prompt
+    assert "every five minutes" in prompt
     assert "gmail.draft" in prompt
     assert "does not require approval" in prompt
     assert "gmail.send" in prompt

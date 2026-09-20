@@ -657,9 +657,7 @@ def executeSageTool(
             "results": getContextRepository().searchRecords(str(arguments["query"])),
         }
     if toolName == "remember_context":
-        if re.search(
-            r"\b(?:remember|save|store|note)\b", userMessage, flags=re.IGNORECASE
-        ) is None:
+        if not hasExplicitContextWriteIntent(userMessage):
             return {
                 "status": "NEEDS_EXPLICIT_REQUEST",
                 "error": "The user did not explicitly request this context write.",
@@ -1389,6 +1387,50 @@ def getPendingApprovalReply(toolResults: list[dict[str, object]]) -> str | None:
     return None
 
 
+def hasExplicitContextWriteIntent(userMessage: str) -> bool:
+    """Recognize an explicit memory verb or imperative standing instruction."""
+    if re.search(
+        r"\b(?:remember|save|store|note)\b", userMessage, flags=re.IGNORECASE
+    ):
+        return True
+    hasStandingLanguage = re.search(
+        r"\b(?:always|from\s+now\s+on|going\s+forward)\b",
+        userMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    hasDirectiveVerb = re.search(
+        r"\b(?:notify|alert|call|address|use|format|respond|reply|speak|write|"
+        r"prioritize|prefer)\b",
+        userMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    return hasStandingLanguage and hasDirectiveVerb
+
+
+def getUngroundedContextWriteFallback(
+    replyText: str, toolResults: list[dict[str, object]]
+) -> str | None:
+    """Reject claims of persisted memory unless a context tool produced a receipt."""
+    hasWriteClaim = re.search(
+        r"\b(?:saved|stored|updated|remembered|recorded|noted)\b.{0,80}"
+        r"\b(?:preferences?|rules?|context|memor(?:y|ies)|instructions?)\b",
+        replyText,
+        flags=re.IGNORECASE,
+    ) is not None
+    if not hasWriteClaim:
+        return None
+    if any(
+        toolResult.get("toolName") == "remember_context"
+        and toolResult.get("status") in {"COMPLETE", "PENDING_APPROVAL"}
+        for toolResult in toolResults
+    ):
+        return None
+    return (
+        "That preference was not saved because this turn produced no successful "
+        "context-write receipt."
+    )
+
+
 def getCapabilityFailureReply(toolResults: list[dict[str, object]]) -> str | None:
     """Explain an exhausted retry without denying that the capability exists."""
     for toolResult in toolResults:
@@ -1621,7 +1663,8 @@ def runToolAwareConversation(
         if not isinstance(directContent, str) or not directContent.strip():
             raise RuntimeError("Sage returned neither a reply nor a tool call")
         denialFallback = getCapabilityDenialFallback(directContent, [])
-        return denialFallback or directContent.strip()
+        contextWriteFallback = getUngroundedContextWriteFallback(directContent, [])
+        return denialFallback or contextWriteFallback or directContent.strip()
     if len(toolCalls) > 3:
         raise RuntimeError("Sage selected too many tools in one turn")
 
@@ -1702,7 +1745,10 @@ def runToolAwareConversation(
     if not isinstance(finalContent, str) or not finalContent.strip():
         raise RuntimeError("Sage returned an empty tool-aware reply")
     denialFallback = getCapabilityDenialFallback(finalContent, allToolResults)
-    return denialFallback or finalContent.strip()
+    contextWriteFallback = getUngroundedContextWriteFallback(
+        finalContent, allToolResults
+    )
+    return denialFallback or contextWriteFallback or finalContent.strip()
 
 
 def sendTelegramMessage(

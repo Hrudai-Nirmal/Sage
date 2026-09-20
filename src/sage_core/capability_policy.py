@@ -39,6 +39,13 @@ def getCapabilityPolicies() -> dict[str, CapabilityPolicy]:
     """Return Sage's complete code-owned capability and authority catalog."""
     policyRows = [
         ("gmail.search", "Search four connected Gmail accounts", "automatic read", True, "search_gmail"),
+        (
+            "gmail.monitor_important",
+            "Poll all four Gmail accounts every five minutes and notify on explicit security, billing, placement, or deadline signals",
+            "automatic read and Telegram notification; Gmail remains unchanged",
+            True,
+            None,
+        ),
         ("calendar.search", "Search the personal-work Calendar snapshot", "automatic read", True, "search_calendar"),
         ("drive.search", "Search all four connected Google Drives", "automatic read", True, "search_drive"),
         ("filesystem.search_downloads", "Search allowlisted Downloads filenames", "automatic read", True, "search_downloads"),

@@ -765,6 +765,46 @@ def testFalseCapabilityDenialFallsBackToGroundedToolEvidence(monkeypatch):
     assert "cannot access" not in reply
 
 
+def testStandingInstructionIsExplicitContextWriteIntent():
+    """An explicit always/from-now-on directive can be persisted without a magic phrase."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramStandingRule", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    assert dispatcher.hasExplicitContextWriteIntent(
+        "Always notify me about placement-related emails"
+    )
+    assert dispatcher.hasExplicitContextWriteIntent(
+        "From now on, use DD/MM/YYYY dates"
+    )
+    assert not dispatcher.hasExplicitContextWriteIntent(
+        "I always read placement emails in the morning"
+    )
+
+
+def testUngroundedPreferenceSaveClaimIsRejected():
+    """Model wording cannot manufacture a context-write receipt."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramContextReceipt", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    fallback = dispatcher.getUngroundedContextWriteFallback(
+        "I've updated your preferences to prioritize placement emails.", []
+    )
+    groundedFallback = dispatcher.getUngroundedContextWriteFallback(
+        "I've updated your preferences.",
+        [{"status": "COMPLETE", "toolName": "remember_context"}],
+    )
+
+    assert fallback is not None
+    assert "not saved" in fallback
+    assert groundedFallback is None
+
+
 def testParsesExplicitContextCommandsWithoutGuessingFields():
     """Telegram offers deterministic inspect, remember, correct, and forget operations."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
