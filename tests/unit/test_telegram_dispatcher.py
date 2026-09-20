@@ -6,6 +6,24 @@ from pathlib import Path
 import sqlite3
 from urllib.error import HTTPError
 
+import pytest
+
+
+def testDispatcherDatabaseContextClosesConnection(tmp_path, monkeypatch):
+    """The persistent worker must not retain one SQLite descriptor per loop."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherDatabase", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", tmp_path / "sage.db")
+
+    with dispatcher.connectDatabase() as connection:
+        connection.execute("CREATE TABLE health_check (id INTEGER)")
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
+
 
 def testCompletesAppliedCallbackWhenTelegramAcknowledgementExpired(tmp_path, monkeypatch):
     """An expired Telegram spinner must not leave an already-applied callback processing."""

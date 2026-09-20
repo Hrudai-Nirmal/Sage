@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -65,6 +67,17 @@ MUTATION_TOOL_NAMES = {
     "update_calendar_event",
 }
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+@contextmanager
+def connectDatabase() -> Iterator[sqlite3.Connection]:
+    """Yield one dispatcher connection and release its descriptor every time."""
+    connection = sqlite3.connect(DATABASE_PATH)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def loadSystemPrompt(modelRole: str) -> str:
@@ -131,7 +144,7 @@ def getContextRepository() -> ContextStateRepository:
 
 def getContextVersion(category: str, recordKey: str) -> int:
     """Return the current exact key version used to bind an approval snapshot."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         recordRow = connection.execute(
             """SELECT version FROM context_records
                WHERE category = ? AND record_key = ? AND status = 'ACTIVE'""",
@@ -354,7 +367,7 @@ def searchIndexedMail(query: str, resultLimit: int = 10) -> list[dict[str, str]]
         whereClauses.append("(" + " OR ".join(alternativeClauses) + ")")
     whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
     queryValues.append(resultLimit)
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         messageRows = connection.execute(
             f"""SELECT account_key, sender, subject, snippet, body_text, internal_date
                 FROM email_messages {whereSql}
@@ -539,7 +552,7 @@ def searchRegisteredDocuments(query: str, resultLimit: int = 20) -> list[dict[st
         queryValues.append(f"%{queryTerm}%")
     whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
     queryValues.append(resultLimit)
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         documentRows = connection.execute(
             f"""SELECT id, canonical_name, original_name, checksum
                 FROM documents {whereSql} ORDER BY imported_at DESC LIMIT ?""",
@@ -939,7 +952,7 @@ def searchIndexedCalendar(query: str, resultLimit: int = 10) -> list[dict[str, s
         queryValues.append(f"%{queryTerm}%")
     whereSql = f"WHERE {' AND '.join(whereClauses)}" if whereClauses else ""
     queryValues.append(resultLimit)
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         eventRows = connection.execute(
             f"""SELECT event_id, summary, description, location, start_at, end_at
                 FROM calendar_events {whereSql} ORDER BY start_at LIMIT ?""",
@@ -980,7 +993,7 @@ def formatDriveSearch(files: list[dict[str, str]]) -> str:
 
 def getPreviousUserMessage(messageId: int) -> str | None:
     """Return the immediately preceding completed user message for explicit follow-ups."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         previousRow = connection.execute(
             """SELECT text FROM telegram_messages
                WHERE message_id < ? AND dispatch_status = 'COMPLETE'
@@ -992,7 +1005,7 @@ def getPreviousUserMessage(messageId: int) -> str | None:
 
 def getRecentConversation(messageId: int, currentMessage: str, historyLimit: int = 8) -> list[dict[str, str]]:
     """Build compact chronological model context from completed Telegram turns."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         previousRows = connection.execute(
             """SELECT text, reply_text FROM telegram_messages
                WHERE message_id < ? AND dispatch_status = 'COMPLETE'
@@ -1159,7 +1172,7 @@ def isSourceFollowup(messageText: str) -> bool:
 
 def getLatestResearch() -> dict[str, object] | None:
     """Load the latest durable research evidence without spending another search credit."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         researchRow = connection.execute(
             """SELECT id, query, retrieved_at, sources_json FROM research_runs
                ORDER BY retrieved_at DESC, id DESC LIMIT 1"""
@@ -1177,7 +1190,7 @@ def getLatestResearch() -> dict[str, object] | None:
 
 def getCurrentMode() -> str:
     """Read Core's durable mode directly so local dispatch follows the same state."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         modeRow = connection.execute(
             "SELECT value FROM system_settings WHERE key = 'mode'"
         ).fetchone()
@@ -1715,7 +1728,7 @@ def sendTelegramMessage(
 
 def buildScheduledContext() -> str:
     """Build a bounded state snapshot for approved scheduled reports."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         taskRows = connection.execute(
             """SELECT title, description, priority, due_at FROM tasks
                WHERE status = 'OPEN' LIMIT 50"""
@@ -2134,7 +2147,7 @@ def dispatchNextGoogleAction(
 
 def dispatchNextCallback(secrets: dict[str, str]) -> bool:
     """Process one verified callback through Core's isolated approval endpoint."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         callback = connection.execute(
             """SELECT callback_id, approval_id, action, sender_id
                FROM telegram_callbacks WHERE status = 'PENDING'
@@ -2161,14 +2174,14 @@ def dispatchNextCallback(secrets: dict[str, str]) -> bool:
         )
     except HTTPError as error:
         if error.code != 409:
-            with sqlite3.connect(DATABASE_PATH) as connection:
+            with connectDatabase() as connection:
                 connection.execute(
                     "UPDATE telegram_callbacks SET status = 'PENDING' WHERE callback_id = ?",
                     (callbackId,),
                 )
             return False
         confirmationText = "That proposal was already handled or expired."
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         connection.execute(
             "UPDATE telegram_callbacks SET status = 'COMPLETE' WHERE callback_id = ?",
             (callbackId,),
@@ -2190,7 +2203,7 @@ def dispatchNextCallback(secrets: dict[str, str]) -> bool:
 
 def dispatchNextMessage(secrets: dict[str, str]) -> bool:
     """Claim one Main message and honor the active resource mode."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         message = connection.execute(
             """SELECT message_id, text, attachment_json FROM telegram_messages
                WHERE message_thread_id = ? AND dispatch_status = 'PENDING'
@@ -2209,7 +2222,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
         replyText = "Sage is shutting down all Sage services and Docker cleanly."
         try:
             sendTelegramMessage(secrets, replyText)
-            with sqlite3.connect(DATABASE_PATH) as connection:
+            with connectDatabase() as connection:
                 connection.execute(
                     "UPDATE telegram_messages SET dispatch_status = 'COMPLETE', reply_text = ? WHERE message_id = ?",
                     (replyText, messageId),
@@ -2217,7 +2230,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
             startShutdownAfterReply()
         except Exception as error:
             logging.error("Telegram shutdown dispatch failed: %s", type(error).__name__)
-            with sqlite3.connect(DATABASE_PATH) as connection:
+            with connectDatabase() as connection:
                 connection.execute(
                     "UPDATE telegram_messages SET dispatch_status = 'PENDING' WHERE message_id = ?",
                     (messageId,),
@@ -2385,20 +2398,20 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
             sendTelegramMessage(secrets, replyText)
     except Exception as error:
         logging.error("Telegram message dispatch failed: %s", type(error).__name__)
-        with sqlite3.connect(DATABASE_PATH) as connection:
+        with connectDatabase() as connection:
             connection.execute("UPDATE telegram_messages SET dispatch_status = 'PENDING' WHERE message_id = ?", (messageId,))
         return False
     finally:
         for ecoAgentName in ecoLoadedAgents:
             setModelAgentState(ecoAgentName, False)
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         connection.execute("UPDATE telegram_messages SET dispatch_status = 'COMPLETE', reply_text = ? WHERE message_id = ?", (replyText, messageId))
     return True
 
 
 def recoverInterruptedWork() -> None:
     """Return claims abandoned by a stopped dispatcher to their durable queues."""
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with connectDatabase() as connection:
         connection.execute(
             "UPDATE telegram_callbacks SET status = 'PENDING' WHERE status = 'PROCESSING'"
         )
@@ -2434,7 +2447,11 @@ def main() -> None:
             dispatchNextDriveAction(secrets, driveActionRepository)
             dispatchNextGoogleAction(secrets, googleActionRepository)
         except Exception as error:
-            logging.error("Telegram dispatcher iteration failed: %s", type(error).__name__)
+            logging.error(
+                "Telegram dispatcher iteration failed: %s: %s",
+                type(error).__name__,
+                error,
+            )
         time.sleep(3)
 
 

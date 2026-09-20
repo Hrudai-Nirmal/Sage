@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import sqlite3
 from pathlib import Path
 
@@ -18,11 +20,16 @@ class SageDatabase:
         self.databasePath = databasePath
         self._initializeSchema()
 
-    def connectDatabase(self) -> sqlite3.Connection:
-        """Open a request-scoped connection with foreign keys enforced."""
+    @contextmanager
+    def connectDatabase(self) -> Iterator[sqlite3.Connection]:
+        """Yield a request-scoped connection and always release its descriptor."""
         connection = sqlite3.connect(self.databasePath)
         connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initializeSchema(self) -> None:
         """Create schemas required for the first state and approval vertical slices."""
