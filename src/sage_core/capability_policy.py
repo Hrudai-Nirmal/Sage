@@ -40,6 +40,13 @@ def getCapabilityPolicies() -> dict[str, CapabilityPolicy]:
     policyRows = [
         ("gmail.search", "Search four connected Gmail accounts", "automatic read", True, "search_gmail"),
         (
+            "gmail.watch.remember",
+            "Save an explicit incoming-email watch rule in confirmed context",
+            "explicit reversible write; matching mail only triggers a notification",
+            True,
+            "remember_email_watch",
+        ),
+        (
             "gmail.monitor_important",
             "Poll all four Gmail accounts every five minutes and notify on explicit security, billing, placement, or deadline signals",
             "automatic read and Telegram notification; Gmail remains unchanged",

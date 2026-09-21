@@ -271,6 +271,82 @@ def testImportantEmailCreatesOneApprovalCardInNotifications(monkeypatch):
     assert completed == [("college", "message-1", "PLACEMENT")]
 
 
+def testLoadsActiveStructuredEmailWatchRulesFromConfirmedContext(tmp_path, monkeypatch):
+    """Only valid active email-watch records become deterministic triage rules."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramEmailWatchContext", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    databasePath = tmp_path / "sage.db"
+    monkeypatch.setattr(dispatcher, "DATABASE_PATH", databasePath)
+    repository = dispatcher.ContextStateRepository(
+        dispatcher.SageDatabase(databasePath), tmp_path
+    )
+    repository.upsertRecord(
+        category="user-rules",
+        recordKey="email-watch.hm-restock",
+        value=(
+            '{"kind":"email-watch","label":"H&M restock",'
+            '"requiredTerms":["H&M","restock"]}'
+        ),
+        sourceType="telegram-explicit",
+        sourceRef="telegram:114",
+        actor="telegram-user",
+    )
+
+    assert dispatcher.getEmailWatchRules() == [{
+        "label": "H&M restock",
+        "requiredTerms": ["H&M", "restock"],
+    }]
+
+
+def testEmailTriageReceivesConfirmedWatchRules(monkeypatch):
+    """The five-minute triage path evaluates confirmed dynamic watch rules."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramEmailWatchTriage", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    receivedRules = []
+
+    class FakeGoogleJobs:
+        def claimEmailTriage(self):
+            return {
+                "accountKey": "personal-work",
+                "messageId": "hm-1",
+                "sender": "H&M <hello@hm.com>",
+                "subject": "Restock alert",
+                "snippet": "Your item is back.",
+                "bodyText": "Restock available.",
+            }
+
+        def completeEmailTriage(self, accountKey, messageId, classification):
+            assert classification["category"] == "OTHER"
+
+        def failEmailTriage(self, accountKey, messageId, errorType):
+            raise AssertionError(errorType)
+
+    watchRules = [{"label": "H&M restock", "requiredTerms": ["H&M", "restock"]}]
+
+    def fakeClassifyEmail(emailMessage, configuredRules):
+        receivedRules.extend(configuredRules)
+        return {
+            "category": "OTHER",
+            "notificationText": "",
+            "shouldNotify": False,
+            "suggestedAction": None,
+            "taskTitle": None,
+        }
+
+    monkeypatch.setattr(dispatcher, "getCurrentMode", lambda: "NORMAL")
+    monkeypatch.setattr(dispatcher, "getEmailWatchRules", lambda: watchRules)
+    monkeypatch.setattr(dispatcher, "classifyEmail", fakeClassifyEmail)
+
+    assert dispatcher.dispatchNextEmailTriage({}, FakeGoogleJobs())
+    assert receivedRules == watchRules
+
+
 def testBuildsScheduledReportFromDurableOperationalContext(tmp_path, monkeypatch):
     """Scheduled reports receive current tasks and cases instead of inventing state."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
@@ -865,6 +941,133 @@ def testNaturalPreferenceForcesGroundedContextWrite(monkeypatch):
         "function": {"name": "remember_context"},
     }
     assert executedTools == ["remember_context"]
+
+
+def testNaturalEmailWatchIntentRecognizesConditionalNotificationRule():
+    """A direct incoming-mail condition is an operational watch request, not small talk."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramEmailWatchIntent", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    exactMessage = (
+        "I have set an alert on H&M for an item restock. "
+        "If I get a mail regarding that notify me immediately"
+    )
+    assert dispatcher.hasNaturalEmailWatchIntent(exactMessage)
+    assert dispatcher.hasNaturalEmailWatchIntent(
+        "Watch my email for Neon billing alerts and let me know immediately"
+    )
+    assert not dispatcher.hasNaturalEmailWatchIntent(
+        "Can you notify me when the deployment finishes?"
+    )
+
+
+def testNaturalEmailWatchForcesStructuredWrite(monkeypatch):
+    """A mail watch request must force the structured rule tool and accept its receipt."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramEmailWatchWrite", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelPayloads = []
+    executedTools = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        if len(modelPayloads) == 1:
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "remember-email-watch",
+                            "function": {
+                                "name": "remember_email_watch",
+                                "arguments": (
+                                    '{"recordKey":"hm-restock","label":"H&M restock",'
+                                    '"requiredTerms":["H&M","restock"]}'
+                                ),
+                            },
+                        }],
+                    }
+                }]
+            }
+        return {"choices": [{"message": {"content": "Saved the email watch rule."}}]}
+
+    def fakeExecuteSageTool(
+        secrets,
+        toolName,
+        rawArguments,
+        userMessage,
+        requestKey="",
+        hasExplicitGmailProposalIntent=False,
+    ):
+        executedTools.append(toolName)
+        return {"status": "COMPLETE", "record": {"key": "email-watch.hm-restock"}}
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(dispatcher, "executeSageTool", fakeExecuteSageTool)
+    messageText = (
+        "I have set an alert on H&M for an item restock. "
+        "If I get a mail regarding that notify me immediately"
+    )
+
+    reply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": messageText}],
+        messageText,
+        "telegram:email-watch",
+    )
+
+    assert reply == "Saved the email watch rule."
+    assert modelPayloads[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "remember_email_watch"},
+    }
+    assert executedTools == ["remember_email_watch"]
+
+
+def testEmailWatchToolStoresStructuredUserRule(monkeypatch):
+    """A watch tool receipt comes from the existing versioned context boundary."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramEmailWatchExecutor", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    postedRequests = []
+
+    def fakePostJson(url, payload, headers):
+        postedRequests.append((url, payload, headers))
+        return {"category": "user-rules", "key": "email-watch.hm-restock", "version": 1}
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    messageText = "If I get an H&M restock email, notify me immediately"
+
+    result = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "remember_email_watch",
+        '{"recordKey":"hm-restock","label":"H&M restock",'
+        '"requiredTerms":["H&M","restock"]}',
+        messageText,
+        "telegram:watch-1",
+    )
+
+    assert result["status"] == "COMPLETE"
+    assert postedRequests[0][0].endswith("/v1/context/records")
+    assert postedRequests[0][1] == {
+        "category": "user-rules",
+        "idempotencyKey": "telegram:watch-1:UPSERT_EMAIL_WATCH",
+        "recordKey": "email-watch.hm-restock",
+        "sourceRef": "telegram:watch-1",
+        "sourceType": "telegram-explicit",
+        "value": (
+            '{"kind":"email-watch","label":"H&M restock",'
+            '"requiredTerms":["H&M","restock"]}'
+        ),
+    }
 
 
 def testNaturalCaseRequestIsRecognizedWithoutSlashCommand():

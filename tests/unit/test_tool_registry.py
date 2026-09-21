@@ -23,6 +23,7 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "import_download_file",
         "forget_context",
         "remember_context",
+        "remember_email_watch",
         "propose_case",
         "search_calendar",
         "search_context",
@@ -116,6 +117,31 @@ def testValidatesNaturalCaseProposalArguments():
         validateToolArguments(
             "propose_case",
             '{"title":"Software job search","objective":""}',
+        )
+
+
+def testValidatesStructuredEmailWatchArguments():
+    """Email watch rules contain only a stable key, label, and bounded match phrases."""
+    assert validateToolArguments(
+        "remember_email_watch",
+        '{"recordKey":"hm-restock","label":"H&M restock",'
+        '"requiredTerms":["H&M","restock"]}',
+    ) == {
+        "recordKey": "hm-restock",
+        "label": "H&M restock",
+        "requiredTerms": ["H&M", "restock"],
+    }
+
+    with pytest.raises(ValueError, match="terms"):
+        validateToolArguments(
+            "remember_email_watch",
+            '{"recordKey":"hm-restock","label":"H&M restock","requiredTerms":[]}',
+        )
+    with pytest.raises(ValueError, match="key"):
+        validateToolArguments(
+            "remember_email_watch",
+            '{"recordKey":"../escape","label":"H&M restock",'
+            '"requiredTerms":["H&M","restock"]}',
         )
 
 

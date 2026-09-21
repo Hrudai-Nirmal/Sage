@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 
-def classifyEmail(emailMessage: dict[str, object]) -> dict[str, object]:
+def classifyEmail(
+    emailMessage: dict[str, object],
+    watchRules: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     """Return a conservative rule-backed alert and optional task suggestion."""
     accountKey = str(emailMessage.get("accountKey", "")).strip()
     sender = str(emailMessage.get("sender", "")).strip()
@@ -36,7 +39,8 @@ def classifyEmail(emailMessage: dict[str, object]) -> dict[str, object]:
         ),
         "OTHER",
     )
-    if category == "OTHER":
+    matchingWatchLabel = _getMatchingWatchLabel(searchableText, watchRules or [])
+    if category == "OTHER" and matchingWatchLabel is None:
         return {
             "category": "OTHER",
             "notificationText": "",
@@ -49,8 +53,11 @@ def classifyEmail(emailMessage: dict[str, object]) -> dict[str, object]:
     subjectLabel = subject or "(no subject)"
     contentPreview = snippet or bodyText
     accountLine = f"Account: {accountKey}\n" if accountKey else ""
+    notificationCategory = (
+        f"WATCH: {matchingWatchLabel}" if category == "OTHER" else category
+    )
     notificationText = (
-        f"Important email [{category}]\n{subjectLabel}\nFrom: {sourceLabel}\n"
+        f"Important email [{notificationCategory}]\n{subjectLabel}\nFrom: {sourceLabel}\n"
         f"{accountLine}{contentPreview[:700]}"
     )
     hasExplicitAction = any(
@@ -58,9 +65,29 @@ def classifyEmail(emailMessage: dict[str, object]) -> dict[str, object]:
         for signal in ("deadline", "due by", "submit by", "last date", "action required", "payment failed", "past due")
     )
     return {
-        "category": category,
+        "category": "WATCH" if category == "OTHER" else category,
         "notificationText": notificationText,
         "shouldNotify": True,
         "suggestedAction": "CREATE_TASK" if hasExplicitAction else None,
         "taskTitle": subjectLabel[:500] if hasExplicitAction else None,
     }
+
+
+def _getMatchingWatchLabel(
+    searchableText: str, watchRules: list[dict[str, object]]
+) -> str | None:
+    """Return the first fully matched, structurally valid user watch rule."""
+    for watchRule in watchRules:
+        label = watchRule.get("label")
+        requiredTerms = watchRule.get("requiredTerms")
+        if (
+            not isinstance(label, str)
+            or not label.strip()
+            or not isinstance(requiredTerms, list)
+            or not requiredTerms
+            or any(not isinstance(term, str) or not term.strip() for term in requiredTerms)
+        ):
+            continue
+        if all(str(term).casefold() in searchableText for term in requiredTerms):
+            return label.strip()
+    return None

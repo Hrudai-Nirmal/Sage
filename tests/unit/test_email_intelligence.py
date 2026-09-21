@@ -62,3 +62,38 @@ def testPlacementOfficeTimingUpdateIncludesTheGmailAccount():
     assert classification["shouldNotify"] is True
     assert "Account: college" in classification["notificationText"]
     assert "timing and venue" in classification["notificationText"]
+
+
+def testExplicitEmailWatchRuleTriggersAContextualNotification():
+    """Every required watch term must match before an ordinary email becomes important."""
+    classification = classifyEmail(
+        {
+            "accountKey": "personal-work",
+            "sender": "H&M <hello@hm.com>",
+            "subject": "Your item is back in stock",
+            "snippet": "The restock alert you requested is ready.",
+            "bodyText": "Shop the item before it sells out again.",
+        },
+        [{"label": "H&M restock", "requiredTerms": ["H&M", "restock"]}],
+    )
+
+    assert classification["category"] == "WATCH"
+    assert classification["shouldNotify"] is True
+    assert classification["suggestedAction"] is None
+    assert "H&M restock" in classification["notificationText"]
+    assert "Account: personal-work" in classification["notificationText"]
+
+
+def testEmailWatchRuleDoesNotTriggerOnPartialMatch():
+    """A merchant newsletter alone is not enough for a merchant-plus-restock rule."""
+    classification = classifyEmail(
+        {
+            "sender": "H&M <hello@hm.com>",
+            "subject": "Weekend offers",
+            "snippet": "Explore this week's collection.",
+            "bodyText": "Promotional newsletter.",
+        },
+        [{"label": "H&M restock", "requiredTerms": ["H&M", "restock"]}],
+    )
+
+    assert classification["shouldNotify"] is False

@@ -129,6 +129,35 @@ def getToolDefinitions() -> list[dict[str, object]]:
         {
             "type": "function",
             "function": {
+                "name": "remember_email_watch",
+                "description": (
+                    "Save one explicit rule to notify the user when a future incoming Gmail "
+                    "message matches every required term. Use short distinctive terms taken "
+                    "from the user's request; do not add inferred brands, products, or events."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "recordKey": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120,
+                            "pattern": r"^[a-z0-9][a-z0-9._-]*$",
+                        },
+                        "label": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "requiredTerms": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1, "maxLength": 100},
+                            "minItems": 1,
+                            "maxItems": 8,
+                        },
+                    },
+                    ["recordKey", "label", "requiredTerms"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "forget_context",
                 "description": (
                     "Propose forgetting one exact confirmed context record after the user "
@@ -430,6 +459,31 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
             "category": str(category),
             "recordKey": recordKey,
             "value": value.strip(),
+        }
+
+    if toolName == "remember_email_watch":
+        _rejectUnknownKeys(arguments, {"recordKey", "label", "requiredTerms"})
+        recordKey = arguments.get("recordKey")
+        label = arguments.get("label")
+        requiredTerms = arguments.get("requiredTerms")
+        if not isinstance(recordKey, str) or CONTEXT_KEY_PATTERN.fullmatch(recordKey) is None:
+            raise ValueError("Email watch key must be a lowercase safe identifier")
+        if not isinstance(label, str) or not label.strip() or len(label) > 500:
+            raise ValueError("Email watch label must be between 1 and 500 characters")
+        if (
+            not isinstance(requiredTerms, list)
+            or not 1 <= len(requiredTerms) <= 8
+            or any(
+                not isinstance(term, str) or not term.strip() or len(term) > 100
+                for term in requiredTerms
+            )
+        ):
+            raise ValueError("Email watch terms must contain between 1 and 8 short phrases")
+        normalizedTerms = list(dict.fromkeys(str(term).strip() for term in requiredTerms))
+        return {
+            "recordKey": recordKey,
+            "label": label.strip(),
+            "requiredTerms": normalizedTerms,
         }
 
     if toolName == "forget_context":

@@ -61,6 +61,7 @@ MUTATION_TOOL_NAMES = {
     "import_download_file",
     "propose_case",
     "remember_context",
+    "remember_email_watch",
     "rename_drive_file",
     "request_gmail_approval",
     "revise_gmail_draft",
@@ -152,6 +153,48 @@ def getContextVersion(category: str, recordKey: str) -> int:
             (category, recordKey),
         ).fetchone()
     return int(recordRow[0]) if recordRow else 0
+
+
+def getEmailWatchRules() -> list[dict[str, object]]:
+    """Load only valid active structured watches from confirmed user-rule context."""
+    with connectDatabase() as connection:
+        watchRows = connection.execute(
+            """SELECT value FROM context_records
+               WHERE category = 'user-rules'
+                 AND record_key LIKE 'email-watch.%'
+                 AND status = 'ACTIVE'
+               ORDER BY updated_at, id"""
+        ).fetchall()
+    watchRules: list[dict[str, object]] = []
+    for (watchValue,) in watchRows:
+        try:
+            parsedWatch = json.loads(str(watchValue))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(parsedWatch, dict) or parsedWatch.get("kind") != "email-watch":
+            continue
+        label = parsedWatch.get("label")
+        requiredTerms = parsedWatch.get("requiredTerms")
+        if (
+            not isinstance(label, str)
+            or not label.strip()
+            or not isinstance(requiredTerms, list)
+            or not 1 <= len(requiredTerms) <= 8
+            or any(
+                not isinstance(term, str) or not term.strip() or len(term) > 100
+                for term in requiredTerms
+            )
+        ):
+            continue
+        watchRules.append(
+            {
+                "label": label.strip(),
+                "requiredTerms": list(
+                    dict.fromkeys(str(term).strip() for term in requiredTerms)
+                ),
+            }
+        )
+    return watchRules
 
 
 def formatContextRecords(records: list[dict[str, object]]) -> str:
@@ -699,6 +742,44 @@ def executeSageTool(
         return {
             "status": "COMPLETE",
             "source": "confirmed-personal-context",
+            "record": contextRecord,
+        }
+    if toolName == "remember_email_watch":
+        if not hasNaturalEmailWatchIntent(userMessage):
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not explicitly request an incoming-email watch.",
+            }
+        watchValue = json.dumps(
+            {
+                "kind": "email-watch",
+                "label": arguments["label"],
+                "requiredTerms": arguments["requiredTerms"],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        contextRecord = postJson(
+            f"{CORE_URL}/v1/context/records",
+            {
+                "category": "user-rules",
+                "idempotencyKey": (
+                    f"{requestKey}:UPSERT_EMAIL_WATCH" if requestKey else None
+                ),
+                "recordKey": f"email-watch.{arguments['recordKey']}",
+                "sourceRef": requestKey or "telegram-explicit",
+                "sourceType": "telegram-explicit",
+                "value": watchValue,
+            },
+            {
+                "Content-Type": "application/json",
+                "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
+            },
+        )
+        return {
+            "status": "COMPLETE",
+            "source": "confirmed-email-watch",
             "record": contextRecord,
         }
     if toolName == "propose_case":
@@ -1440,6 +1521,24 @@ def hasNaturalCaseProposalIntent(userMessage: str) -> bool:
     ) is not None
 
 
+def hasNaturalEmailWatchIntent(userMessage: str) -> bool:
+    """Recognize an explicit request to notify on matching future incoming email."""
+    hasEmailSource = re.search(
+        r"\b(?:e-?mail|mail|gmail|inbox)\b", userMessage, flags=re.IGNORECASE
+    ) is not None
+    hasNotificationAction = re.search(
+        r"\b(?:notify|alert|tell|inform)\s+me\b|\blet\s+me\s+know\b",
+        userMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    hasFutureWatch = re.search(
+        r"\b(?:if|when|whenever)\b|\b(?:watch|monitor|look\s+out)\b",
+        userMessage,
+        flags=re.IGNORECASE,
+    ) is not None
+    return hasEmailSource and hasNotificationAction and hasFutureWatch
+
+
 def getUngroundedContextWriteFallback(
     replyText: str, toolResults: list[dict[str, object]]
 ) -> str | None:
@@ -1453,7 +1552,7 @@ def getUngroundedContextWriteFallback(
     if not hasWriteClaim:
         return None
     if any(
-        toolResult.get("toolName") == "remember_context"
+        toolResult.get("toolName") in {"remember_context", "remember_email_watch"}
         and toolResult.get("status") in {"COMPLETE", "PENDING_APPROVAL"}
         for toolResult in toolResults
     ):
@@ -1671,6 +1770,11 @@ def runToolAwareConversation(
         initialToolChoice = {
             "type": "function",
             "function": {"name": gmailToolName},
+        }
+    elif hasNaturalEmailWatchIntent(userMessage):
+        initialToolChoice = {
+            "type": "function",
+            "function": {"name": "remember_email_watch"},
         }
     elif hasNaturalCaseProposalIntent(userMessage):
         initialToolChoice = {
@@ -1938,7 +2042,7 @@ def dispatchNextEmailTriage(
     accountKey = str(triageJob["accountKey"])
     messageId = str(triageJob["messageId"])
     try:
-        classification = classifyEmail(triageJob)
+        classification = classifyEmail(triageJob, getEmailWatchRules())
         if classification["shouldNotify"]:
             replyMarkup = None
             notificationText = str(classification["notificationText"])
