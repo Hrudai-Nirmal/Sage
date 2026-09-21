@@ -83,12 +83,15 @@ Document handling is also available through ordinary Telegram phrasing. Sage can
 
 Personal context is available through ordinary explicit requests and deterministic commands:
 
+- Direct first-person preference statements such as “I prefer…”, “I dislike…”, and “please call me…” force a real `remember_context` call; Sage cannot claim the preference was saved without a successful receipt.
 - `/context [terms]` lists matching confirmed records with the exact ID and version needed for later changes.
 - `/remember <category> | <key> | <value>` creates or revises a record. `preferences`, `projects-commitments`, and `user-rules` are ordinary records. `identity`, `people`, `education-work`, `owned-items`, and `important-dates` always produce an approval card.
 - `/correct <record-id> | <new-value>` revises the exact record. Sensitive corrections remain approval-gated.
 - `/forget <record-id>` always creates an approval card. Approval removes the managed JSON file and redacts the value from both the active row and its retained revisions.
 
 Sage can search confirmed context automatically and receives a bounded relevant-context block for ordinary chat, research synthesis, attachment synthesis, and scheduled reports. Explicit writes are replay-safe, every revision keeps its source and actor, stale approvals cannot overwrite a newer record, and the local operator dashboard exposes the active registry for review. If Sage merely thinks something may be worth remembering, it must suggest an exact `/remember` command instead of persisting the inference.
+
+Cases also accept natural instructions such as “create a case for my software job search” or “track placement preparation as a case.” Sage extracts a bounded title and objective through its case proposal tool, then sends the same one-time Telegram approval card used by `/case`; no case exists until that card is approved.
 
 Gmail polling never marks email read or changes labels/archives; outbound mail runs only through the separately approved outbox. Each account is polled independently, so an expired OAuth credential cannot block the other three accounts. Clear security, billing, placement, and deadline messages can trigger Notifications, which identify the receiving account. Placement matching includes placement/career offices, campus hiring, application status, interview logistics, shortlisting, and offers. Suggested tasks remain approval-gated. Calendar creates deterministic reminders 10 minutes before timed events. Drive is never monitored in the background.
 

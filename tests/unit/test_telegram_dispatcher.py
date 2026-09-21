@@ -784,6 +784,212 @@ def testStandingInstructionIsExplicitContextWriteIntent():
     )
 
 
+def testDirectNaturalPreferenceIsExplicitContextWriteIntent():
+    """First-person preferences and direct assistant-style requests are save intent."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramNaturalPreference", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    assert dispatcher.hasExplicitContextWriteIntent(
+        "I prefer concise answers with enough context"
+    )
+    assert dispatcher.hasExplicitContextWriteIntent("Please call me chief")
+    assert dispatcher.hasExplicitContextWriteIntent(
+        "I don't like vague notifications"
+    )
+    assert not dispatcher.hasExplicitContextWriteIntent(
+        "Do you prefer email or Telegram?"
+    )
+
+
+def testNaturalPreferenceForcesGroundedContextWrite(monkeypatch):
+    """A direct preference must use the persistence tool before Sage claims it was saved."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramPreferenceWrite", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelPayloads = []
+    executedTools = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        if len(modelPayloads) == 1:
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "remember-preference",
+                            "function": {
+                                "name": "remember_context",
+                                "arguments": (
+                                    '{"category":"preferences",'
+                                    '"recordKey":"response-detail",'
+                                    '"value":"Concise answers with enough context"}'
+                                ),
+                            },
+                        }],
+                    }
+                }]
+            }
+        return {"choices": [{"message": {"content": "Saved your preference."}}]}
+
+    def fakeExecuteSageTool(
+        secrets,
+        toolName,
+        rawArguments,
+        userMessage,
+        requestKey="",
+        hasExplicitGmailProposalIntent=False,
+    ):
+        executedTools.append(toolName)
+        return {"status": "COMPLETE", "record": {"key": "response-detail"}}
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(dispatcher, "executeSageTool", fakeExecuteSageTool)
+
+    reply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "I prefer concise answers with enough context"}],
+        "I prefer concise answers with enough context",
+        "telegram:preference",
+    )
+
+    assert reply == "Saved your preference."
+    assert modelPayloads[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "remember_context"},
+    }
+    assert executedTools == ["remember_context"]
+
+
+def testNaturalCaseRequestIsRecognizedWithoutSlashCommand():
+    """Ordinary explicit wording can request a case while discussion remains non-mutating."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramNaturalCaseIntent", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    assert dispatcher.hasNaturalCaseProposalIntent(
+        "Create a case for my software job search"
+    )
+    assert dispatcher.hasNaturalCaseProposalIntent(
+        "Track my placement preparation as a case"
+    )
+    assert not dispatcher.hasNaturalCaseProposalIntent(
+        "That is an interesting legal case"
+    )
+    assert not dispatcher.hasNaturalCaseProposalIntent(
+        "Make a case for why Python is the better choice"
+    )
+
+
+def testNaturalCaseRequestForcesApprovalProposal(monkeypatch):
+    """A natural case request must enter the trusted approval path."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramNaturalCaseProposal", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelPayloads = []
+    executedTools = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        return {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "propose-case",
+                        "function": {
+                            "name": "propose_case",
+                            "arguments": (
+                                '{"title":"Software job search",'
+                                '"objective":"Secure a software development role"}'
+                            ),
+                        },
+                    }],
+                }
+            }]
+        }
+
+    def fakeExecuteSageTool(
+        secrets,
+        toolName,
+        rawArguments,
+        userMessage,
+        requestKey="",
+        hasExplicitGmailProposalIntent=False,
+    ):
+        executedTools.append(toolName)
+        return {
+            "status": "PENDING_APPROVAL",
+            "result": "Approval card sent. No case exists until approval.",
+        }
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+    monkeypatch.setattr(dispatcher, "executeSageTool", fakeExecuteSageTool)
+
+    reply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "Create a case for my software job search"}],
+        "Create a case for my software job search",
+        "telegram:case",
+    )
+
+    assert reply == "Approval card sent. No case exists until approval."
+    assert modelPayloads[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "propose_case"},
+    }
+    assert executedTools == ["propose_case"]
+
+
+def testCaseToolCreatesOnlyAnApprovalRequest(monkeypatch):
+    """The model-visible case tool cannot bypass the independent approval channel."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramCaseExecutor", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    approvalRequests = []
+
+    def fakeSendApprovalRequest(
+        secrets,
+        actionType,
+        payload,
+        label,
+        idempotencyKey="",
+    ):
+        approvalRequests.append((actionType, payload, label, idempotencyKey))
+        return "Approval card sent."
+
+    monkeypatch.setattr(dispatcher, "sendApprovalRequest", fakeSendApprovalRequest)
+
+    result = dispatcher.executeSageTool(
+        {},
+        "propose_case",
+        '{"title":"Software job search","objective":"Secure a developer role"}',
+        "Please create a case for my software job search",
+        "telegram:case-1",
+    )
+
+    assert result == {"status": "PENDING_APPROVAL", "result": "Approval card sent."}
+    assert approvalRequests == [(
+        "CREATE_CASE",
+        {"title": "Software job search", "objective": "Secure a developer role"},
+        "Case: Software job search\nObjective: Secure a developer role",
+        "telegram:case-1:CREATE_CASE",
+    )]
+
+
 def testUngroundedPreferenceSaveClaimIsRejected():
     """Model wording cannot manufacture a context-write receipt."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"

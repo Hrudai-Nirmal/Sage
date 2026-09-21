@@ -59,6 +59,7 @@ MUTATION_TOOL_NAMES = {
     "draft_gmail_message",
     "forget_context",
     "import_download_file",
+    "propose_case",
     "remember_context",
     "rename_drive_file",
     "request_gmail_approval",
@@ -700,6 +701,20 @@ def executeSageTool(
             "source": "confirmed-personal-context",
             "record": contextRecord,
         }
+    if toolName == "propose_case":
+        if not hasNaturalCaseProposalIntent(userMessage):
+            return {
+                "status": "NEEDS_EXPLICIT_REQUEST",
+                "error": "The user did not explicitly request a case proposal.",
+            }
+        approvalText = sendApprovalRequest(
+            secrets,
+            "CREATE_CASE",
+            arguments,
+            f"Case: {arguments['title']}\nObjective: {arguments['objective']}",
+            f"{requestKey}:CREATE_CASE" if requestKey else "",
+        )
+        return {"status": "PENDING_APPROVAL", "result": approvalText}
     if toolName == "forget_context":
         if re.search(
             r"\b(?:forget|delete|remove)\b", userMessage, flags=re.IGNORECASE
@@ -1388,9 +1403,17 @@ def getPendingApprovalReply(toolResults: list[dict[str, object]]) -> str | None:
 
 
 def hasExplicitContextWriteIntent(userMessage: str) -> bool:
-    """Recognize an explicit memory verb or imperative standing instruction."""
+    """Recognize explicit memory language, standing rules, and direct preferences."""
     if re.search(
         r"\b(?:remember|save|store|note)\b", userMessage, flags=re.IGNORECASE
+    ):
+        return True
+    if re.search(
+        r"\b(?:i|we)\s+(?:(?:do\s+not|don't)\s+like|prefer|like|dislike|hate|avoid)\b|"
+        r"\bmy\s+preference\s+is\b|"
+        r"\b(?:please\s+)?(?:call|address)\s+me\b",
+        userMessage,
+        flags=re.IGNORECASE,
     ):
         return True
     hasStandingLanguage = re.search(
@@ -1405,6 +1428,16 @@ def hasExplicitContextWriteIntent(userMessage: str) -> bool:
         flags=re.IGNORECASE,
     ) is not None
     return hasStandingLanguage and hasDirectiveVerb
+
+
+def hasNaturalCaseProposalIntent(userMessage: str) -> bool:
+    """Recognize a direct request to propose a case without treating discussion as intent."""
+    return re.search(
+        r"\b(?:create|open|start|set\s+up)\s+(?:(?:a|an|the|new)\s+)?case\b|"
+        r"\b(?:track|manage|treat|turn)\b.{0,80}\b(?:as|into)\s+(?:a\s+)?case\b",
+        userMessage,
+        flags=re.IGNORECASE,
+    ) is not None
 
 
 def getUngroundedContextWriteFallback(
@@ -1638,6 +1671,16 @@ def runToolAwareConversation(
         initialToolChoice = {
             "type": "function",
             "function": {"name": gmailToolName},
+        }
+    elif hasNaturalCaseProposalIntent(userMessage):
+        initialToolChoice = {
+            "type": "function",
+            "function": {"name": "propose_case"},
+        }
+    elif hasExplicitContextWriteIntent(userMessage):
+        initialToolChoice = {
+            "type": "function",
+            "function": {"name": "remember_context"},
         }
     elif len(namedReadTools) == 1:
         initialToolChoice = {

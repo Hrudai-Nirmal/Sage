@@ -23,6 +23,7 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "import_download_file",
         "forget_context",
         "remember_context",
+        "propose_case",
         "search_calendar",
         "search_context",
         "search_documents",
@@ -93,6 +94,28 @@ def testValidatesPersonalContextTools():
         validateToolArguments(
             "remember_context",
             '{"category":"preferences","recordKey":"../escape","value":"bad"}',
+        )
+
+
+def testValidatesNaturalCaseProposalArguments():
+    """Case proposals require a bounded title and a concrete objective."""
+    assert validateToolArguments(
+        "propose_case",
+        '{"title":"Software job search","objective":"Secure a software development role"}',
+    ) == {
+        "title": "Software job search",
+        "objective": "Secure a software development role",
+    }
+
+    with pytest.raises(ValueError, match="title"):
+        validateToolArguments(
+            "propose_case",
+            '{"title":"","objective":"Secure a software development role"}',
+        )
+    with pytest.raises(ValueError, match="objective"):
+        validateToolArguments(
+            "propose_case",
+            '{"title":"Software job search","objective":""}',
         )
 
 

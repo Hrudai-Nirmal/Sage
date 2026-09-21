@@ -143,6 +143,28 @@ def getToolDefinitions() -> list[dict[str, object]]:
         {
             "type": "function",
             "function": {
+                "name": "propose_case",
+                "description": (
+                    "Propose a durable case only when the user explicitly asks to create, open, "
+                    "start, or track something as a case. This produces an approval card and does "
+                    "not create the case until the user independently approves it."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "objective": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 10_000,
+                        },
+                    },
+                    ["title", "objective"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "import_download_file",
                 "description": (
                     "Copy one exact relative file path from the allowlisted Downloads folder into "
@@ -416,6 +438,20 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
         if not isinstance(recordId, str) or not recordId.strip() or len(recordId) > 100:
             raise ValueError("Context record ID is invalid")
         return {"recordId": recordId.strip()}
+
+    if toolName == "propose_case":
+        _rejectUnknownKeys(arguments, {"title", "objective"})
+        title = arguments.get("title")
+        objective = arguments.get("objective")
+        if not isinstance(title, str) or not title.strip() or len(title) > 500:
+            raise ValueError("Case title must be between 1 and 500 characters")
+        if (
+            not isinstance(objective, str)
+            or not objective.strip()
+            or len(objective) > 10_000
+        ):
+            raise ValueError("Case objective must be between 1 and 10000 characters")
+        return {"title": title.strip(), "objective": objective.strip()}
 
     if toolName in {
         "draft_gmail_message",
