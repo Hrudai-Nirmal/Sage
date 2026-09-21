@@ -58,7 +58,7 @@ Runtime modes can be changed locally with `scripts/set-sage-mode.sh <mode>` or f
 - `/sleep` keeps Telegram mode control available but does not run model work.
 - `/shutdown` confirms in Telegram, then stops Sage launch agents, containers, and temporary state. Restart remains local-only.
 
-Use `/research <question>` in the Main Telegram topic for current online research. Explicit natural phrasing such as “look for”, “search online for”, or “look up” works too. Sage retrieves at most three India-boosted sources, extracts readable page content locally, treats all retrieved text as untrusted, and returns a timestamped answer with numbered citations. Ambiguous ordinary conversation does not silently trigger web access.
+Use `/research <question>` in the Main Telegram topic for a deterministic research shortcut. Natural research requests use Sage's shared semantic capability gateway instead of a phrase list. Sage retrieves at most three India-boosted sources, extracts readable page content locally, treats all retrieved text as untrusted, and returns a timestamped answer with numbered citations. Ambiguous ordinary conversation does not silently trigger web access.
 
 Google commands in Telegram use the following boundaries:
 
@@ -84,7 +84,7 @@ Document handling is also available through ordinary Telegram phrasing. Sage can
 Personal context is available through ordinary explicit requests and deterministic commands:
 
 - Direct first-person preference statements such as “I prefer…”, “I dislike…”, and “please call me…” force a real `remember_context` call; Sage cannot claim the preference was saved without a successful receipt.
-- Natural incoming-email rules such as “if I get an H&M restock email, notify me immediately” force a structured `remember_email_watch` write. The rule is stored as versioned `user-rules` context and the five-minute Gmail triage notifies only when every extracted phrase matches.
+- Natural incoming-email rules such as “if I get an H&M restock email, notify me immediately” can select a structured `remember_email_watch` write through the semantic gateway. The deterministic boundary verifies an exact quote from the current message and every proposed match term before storing the versioned `user-rules` record. Five-minute Gmail triage notifies only when every term matches.
 - `/context [terms]` lists matching confirmed records with the exact ID and version needed for later changes.
 - `/remember <category> | <key> | <value>` creates or revises a record. `preferences`, `projects-commitments`, and `user-rules` are ordinary records. `identity`, `people`, `education-work`, `owned-items`, and `important-dates` always produce an approval card.
 - `/correct <record-id> | <new-value>` revises the exact record. Sensitive corrections remain approval-gated.
@@ -92,7 +92,9 @@ Personal context is available through ordinary explicit requests and determinist
 
 Sage can search confirmed context automatically and receives a bounded relevant-context block for ordinary chat, research synthesis, attachment synthesis, and scheduled reports. Explicit writes are replay-safe, every revision keeps its source and actor, stale approvals cannot overwrite a newer record, and the local operator dashboard exposes the active registry for review. If Sage merely thinks something may be worth remembering, it must suggest an exact `/remember` command instead of persisting the inference.
 
-Cases also accept natural instructions such as “create a case for my software job search” or “track placement preparation as a case.” Sage extracts a bounded title and objective through its case proposal tool, then sends the same one-time Telegram approval card used by `/case`; no case exists until that card is approved.
+Cases also accept natural instructions such as “create a case for my software job search” or “track placement preparation as a case.” The semantic gateway may select the case proposal tool, but deterministic code requires its evidence to be an exact quote from the current message. Sage then sends the same one-time Telegram approval card used by `/case`; no case exists until that card is approved.
+
+Every ordinary Telegram turn first produces one typed decision: `respond` for conversation or one configured capability for an action. This replaces feature-by-feature natural-language regex routing. Exact slash commands remain deterministic shortcuts, and security rules, evidence validation, capability limits, and approval buttons remain code-owned.
 
 Gmail polling never marks email read or changes labels/archives; outbound mail runs only through the separately approved outbox. Each account is polled independently, so an expired OAuth credential cannot block the other three accounts. Clear security, billing, placement, deadline, and explicitly configured email-watch matches can trigger Notifications, which identify the receiving account. Placement matching includes placement/career offices, campus hiring, application status, interview logistics, shortlisting, and offers. Suggested tasks remain approval-gated. Calendar creates deterministic reminders 10 minutes before timed events. Drive is never monitored in the background.
 

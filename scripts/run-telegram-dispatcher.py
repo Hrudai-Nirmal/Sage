@@ -32,7 +32,6 @@ from sage_core.capability_policy import (
     getCapabilityAwarenessPrompt,
     getCapabilityDisplayName,
     getDeniedCapabilityId,
-    getNamedReadTools,
 )
 from sage_core.drive_action_state import DriveActionRepository
 from sage_core.email_intelligence import classifyEmail
@@ -289,99 +288,22 @@ def getScheduleProposal(messageText: str) -> dict[str, object] | None:
     }
 
 
-def getResearchQuery(messageText: str, previousUserMessage: str | None = None) -> str | None:
-    """Return a query only from deterministic search wording or its direct follow-up."""
+def getResearchQuery(messageText: str) -> str | None:
+    """Return a query only from the exact deterministic research command."""
     commandToken, separator, query = messageText.strip().partition(" ")
     commandName = commandToken.split("@", 1)[0].lower()
     if commandName == "/research":
         return query.strip() if separator and query.strip() else None
-    normalizedMessage = messageText.strip()
-    researchPatterns = (
-        r"^(?:can|could|would) you (?:please )?(?:look for|search(?: online)? for|find|research|look up)\s+(.+)$",
-        r"^(?:please )?(?:look for|search(?: online)? for|find me|research|look up)\s+(.+)$",
-    )
-    for researchPattern in researchPatterns:
-        researchMatch = re.match(researchPattern, normalizedMessage, flags=re.IGNORECASE)
-        if researchMatch:
-            return researchMatch.group(1).strip(" .?!")
-    if previousUserMessage and re.search(
-        r"\b(?:try it|do it now|go ahead|search now)\b", normalizedMessage, flags=re.IGNORECASE
-    ):
-        return getResearchQuery(previousUserMessage)
     return None
 
 
 def getMailQuery(messageText: str) -> str | None:
-    """Return a query from an exact command or deterministic Gmail wording."""
+    """Return a query only from the exact deterministic Gmail command."""
     commandToken, separator, query = messageText.strip().partition(" ")
     commandName = commandToken.split("@", 1)[0].lower()
     if commandName == "/mail":
         return query.strip() if separator else ""
-    serviceNotificationMatch = re.match(
-        r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
-        r"(?:check|search|find|show|scan|look\s+for)"
-        r"(?:\s+for)?(?:\s+any)?(?:\s+recent)?\s+"
-        r"(?:notifications?|alerts?|updates?|messages?)\s+"
-        r"(?:from|regarding|about)\s+(.+?)[.?!]*$",
-        messageText.strip(),
-        flags=re.IGNORECASE,
-    )
-    if serviceNotificationMatch is not None:
-        sourceNames = [
-            sourceName.strip()
-            for sourceName in re.split(
-                r"\s+(?:and|or)\s+|,\s*",
-                serviceNotificationMatch.group(1),
-                flags=re.IGNORECASE,
-            )
-            if sourceName.strip()
-        ]
-        return "|".join(f"from:{sourceName}" for sourceName in sourceNames[:10])
-    receivedMailMatch = re.match(
-        r"^(?:do\s+i\s+have|have\s+i\s+received|did\s+i\s+get)"
-        r"(?:\s+any)?\s+(?:gmail|e-?mails?|mails?|messages?|anything)"
-        r"(?:\s+(from|about|regarding)\s+(.+?))?[.?!]*$",
-        messageText.strip(),
-        flags=re.IGNORECASE,
-    )
-    if receivedMailMatch is not None:
-        relation = (receivedMailMatch.group(1) or "").casefold()
-        receivedQuery = (receivedMailMatch.group(2) or "").strip()
-        return f"from:{receivedQuery}" if relation == "from" else receivedQuery
-    contentFirstMailMatch = re.match(
-        r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
-        r"(?:check|search|find|show|scan|look\s+for)"
-        r"(?:\s+for)?(?:\s+me)?(?:\s+any)?\s+(.+?)\s+"
-        r"(?:in|inside|across)\s+(?:all\s+)?(?:of\s+)?(?:my\s+)?"
-        r"(?:gmail|e-?mails?|mails?|inbox)(?:\s+accounts?)?[.?!]*$",
-        messageText.strip(),
-        flags=re.IGNORECASE,
-    )
-    if contentFirstMailMatch is not None:
-        return re.sub(
-            r"^(?:(?:a|an|the|my|recent|latest|recently)\s+)+",
-            "",
-            contentFirstMailMatch.group(1).strip(),
-            flags=re.IGNORECASE,
-        )
-    mailMatch = re.match(
-        r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
-        r"(?:check|search|find|show|scan|look\s+for)"
-        r"(?:\s+for)?(?:\s+me)?(?:\s+any)?\s+(?:my\s+)?"
-        r"(?:gmail|e-?mails?|mails?|inbox)"
-        r"(?:\s+(?:for|regarding|about|from)\s+(.+?))?[.?!]*$",
-        messageText.strip(),
-        flags=re.IGNORECASE,
-    )
-    if mailMatch is None:
-        return None
-    naturalQuery = (mailMatch.group(1) or "").strip()
-    return re.sub(
-        r"^(?:(?:a|an|the|my|recent|latest|recently)\s+)+",
-        "",
-        naturalQuery,
-        flags=re.IGNORECASE,
-    )
+    return None
 
 
 def searchIndexedMail(query: str, resultLimit: int = 10) -> list[dict[str, str]]:
@@ -632,6 +554,19 @@ def importDownloadFile(
     }
 
 
+def hasGroundedEvidence(userMessage: str, evidenceText: str) -> bool:
+    """Accept model-proposed intent evidence only when it quotes the current user."""
+    normalizedMessage = " ".join(userMessage.split()).casefold()
+    normalizedEvidence = " ".join(evidenceText.split()).strip()
+    if len(normalizedEvidence) >= 2 and (
+        (normalizedEvidence[0], normalizedEvidence[-1])
+        in {("\"", "\""), ("'", "'"), ("“", "”"), ("‘", "’")}
+    ):
+        normalizedEvidence = normalizedEvidence[1:-1].strip()
+    normalizedEvidence = normalizedEvidence.casefold()
+    return bool(normalizedEvidence) and normalizedEvidence in normalizedMessage
+
+
 def executeSageTool(
     secrets: dict[str, str],
     toolName: str,
@@ -645,6 +580,35 @@ def executeSageTool(
         arguments = validateToolArguments(toolName, rawArguments)
     except ValueError as error:
         return {"status": "REJECTED", "error": str(error)}
+    if toolName == "respond":
+        return {"status": "COMPLETE", "text": arguments["text"]}
+    if toolName == "research_web":
+        research = postJson(
+            f"{CORE_URL}/v1/research/search",
+            {"query": arguments["query"], "maxResults": 3},
+            {
+                "Content-Type": "application/json",
+                "X-Sage-Research-Token": secrets["SAGE_RESEARCH_TOKEN"],
+            },
+        )
+        boundedSources = []
+        for rawSource in research.get("sources", [])[:3]:
+            if not isinstance(rawSource, dict):
+                continue
+            boundedSources.append(
+                {
+                    "content": str(rawSource.get("content", ""))[:12_000],
+                    "title": str(rawSource.get("title", ""))[:500],
+                    "url": str(rawSource.get("url", ""))[:2_000],
+                }
+            )
+        return {
+            "status": "COMPLETE",
+            "source": "online-research",
+            "query": str(research.get("query", arguments["query"])),
+            "retrievedAt": str(research.get("retrievedAt", "unknown")),
+            "sources": boundedSources,
+        }
     if toolName == "search_gmail":
         boundedEmailResults = []
         for emailMessage in searchIndexedMail(arguments["query"]):
@@ -701,14 +665,16 @@ def executeSageTool(
             "results": getContextRepository().searchRecords(str(arguments["query"])),
         }
     if toolName == "remember_context":
-        if not hasExplicitContextWriteIntent(userMessage):
+        if not hasGroundedEvidence(userMessage, str(arguments["evidenceText"])):
             return {
-                "status": "NEEDS_EXPLICIT_REQUEST",
-                "error": "The user did not explicitly request this context write.",
+                "status": "REJECTED",
+                "error": "Context-write evidence was not found in the current user message.",
             }
         category = str(arguments["category"])
         contextPayload = {
-            **arguments,
+            "category": category,
+            "recordKey": arguments["recordKey"],
+            "value": arguments["value"],
             "idempotencyKey": (
                 f"{requestKey}:UPSERT_CONTEXT_RECORD" if requestKey else None
             ),
@@ -745,10 +711,15 @@ def executeSageTool(
             "record": contextRecord,
         }
     if toolName == "remember_email_watch":
-        if not hasNaturalEmailWatchIntent(userMessage):
+        evidenceText = str(arguments["evidenceText"])
+        hasGroundedTerms = all(
+            str(requiredTerm).casefold() in evidenceText.casefold()
+            for requiredTerm in arguments["requiredTerms"]
+        )
+        if not hasGroundedEvidence(userMessage, evidenceText) or not hasGroundedTerms:
             return {
-                "status": "NEEDS_EXPLICIT_REQUEST",
-                "error": "The user did not explicitly request an incoming-email watch.",
+                "status": "REJECTED",
+                "error": "Email-watch evidence or match terms were not grounded in the current user message.",
             }
         watchValue = json.dumps(
             {
@@ -783,15 +754,19 @@ def executeSageTool(
             "record": contextRecord,
         }
     if toolName == "propose_case":
-        if not hasNaturalCaseProposalIntent(userMessage):
+        if not hasGroundedEvidence(userMessage, str(arguments["evidenceText"])):
             return {
-                "status": "NEEDS_EXPLICIT_REQUEST",
-                "error": "The user did not explicitly request a case proposal.",
+                "status": "REJECTED",
+                "error": "Case-proposal evidence was not found in the current user message.",
             }
+        casePayload = {
+            "title": arguments["title"],
+            "objective": arguments["objective"],
+        }
         approvalText = sendApprovalRequest(
             secrets,
             "CREATE_CASE",
-            arguments,
+            casePayload,
             f"Case: {arguments['title']}\nObjective: {arguments['objective']}",
             f"{requestKey}:CREATE_CASE" if requestKey else "",
         )
@@ -1085,18 +1060,6 @@ def formatDriveSearch(files: list[dict[str, str]]) -> str:
     return ("Drive results:\n\n" + "\n\n".join(sections))[:4_000]
 
 
-def getPreviousUserMessage(messageId: int) -> str | None:
-    """Return the immediately preceding completed user message for explicit follow-ups."""
-    with connectDatabase() as connection:
-        previousRow = connection.execute(
-            """SELECT text FROM telegram_messages
-               WHERE message_id < ? AND dispatch_status = 'COMPLETE'
-               ORDER BY message_id DESC LIMIT 1""",
-            (messageId,),
-        ).fetchone()
-    return str(previousRow[0]) if previousRow else None
-
-
 def getRecentConversation(messageId: int, currentMessage: str, historyLimit: int = 8) -> list[dict[str, str]]:
     """Build compact chronological model context from completed Telegram turns."""
     with connectDatabase() as connection:
@@ -1250,36 +1213,6 @@ def analyzeAttachment(
         for cleanupPath in {attachmentPath, irisImagePath}:
             if cleanupPath is not None:
                 cleanupPath.unlink(missing_ok=True)
-
-
-def isSourceFollowup(messageText: str) -> bool:
-    """Recognize a direct request for the most recently retrieved source links."""
-    return bool(
-        re.search(
-            r"\b(?:links?|urls?|sources?|citations?)\b",
-            messageText,
-            flags=re.IGNORECASE,
-        )
-        and re.search(r"\b(?:give|show|send|provide|what|where)\b", messageText, flags=re.IGNORECASE)
-    )
-
-
-def getLatestResearch() -> dict[str, object] | None:
-    """Load the latest durable research evidence without spending another search credit."""
-    with connectDatabase() as connection:
-        researchRow = connection.execute(
-            """SELECT id, query, retrieved_at, sources_json FROM research_runs
-               ORDER BY retrieved_at DESC, id DESC LIMIT 1"""
-        ).fetchone()
-    if researchRow is None:
-        return None
-    researchId, query, retrievedAt, sourcesJson = researchRow
-    return {
-        "id": researchId,
-        "query": query,
-        "retrievedAt": retrievedAt,
-        "sources": json.loads(sourcesJson),
-    }
 
 
 def getCurrentMode() -> str:
@@ -1483,60 +1416,16 @@ def getPendingApprovalReply(toolResults: list[dict[str, object]]) -> str | None:
     return None
 
 
-def hasExplicitContextWriteIntent(userMessage: str) -> bool:
-    """Recognize explicit memory language, standing rules, and direct preferences."""
-    if re.search(
-        r"\b(?:remember|save|store|note)\b", userMessage, flags=re.IGNORECASE
-    ):
-        return True
-    if re.search(
-        r"\b(?:i|we)\s+(?:(?:do\s+not|don't)\s+like|prefer|like|dislike|hate|avoid)\b|"
-        r"\bmy\s+preference\s+is\b|"
-        r"\b(?:please\s+)?(?:call|address)\s+me\b",
-        userMessage,
-        flags=re.IGNORECASE,
-    ):
-        return True
-    hasStandingLanguage = re.search(
-        r"\b(?:always|from\s+now\s+on|going\s+forward)\b",
-        userMessage,
-        flags=re.IGNORECASE,
-    ) is not None
-    hasDirectiveVerb = re.search(
-        r"\b(?:notify|alert|call|address|use|format|respond|reply|speak|write|"
-        r"prioritize|prefer)\b",
-        userMessage,
-        flags=re.IGNORECASE,
-    ) is not None
-    return hasStandingLanguage and hasDirectiveVerb
-
-
-def hasNaturalCaseProposalIntent(userMessage: str) -> bool:
-    """Recognize a direct request to propose a case without treating discussion as intent."""
-    return re.search(
-        r"\b(?:create|open|start|set\s+up)\s+(?:(?:a|an|the|new)\s+)?case\b|"
-        r"\b(?:track|manage|treat|turn)\b.{0,80}\b(?:as|into)\s+(?:a\s+)?case\b",
-        userMessage,
-        flags=re.IGNORECASE,
-    ) is not None
-
-
-def hasNaturalEmailWatchIntent(userMessage: str) -> bool:
-    """Recognize an explicit request to notify on matching future incoming email."""
-    hasEmailSource = re.search(
-        r"\b(?:e-?mail|mail|gmail|inbox)\b", userMessage, flags=re.IGNORECASE
-    ) is not None
-    hasNotificationAction = re.search(
-        r"\b(?:notify|alert|tell|inform)\s+me\b|\blet\s+me\s+know\b",
-        userMessage,
-        flags=re.IGNORECASE,
-    ) is not None
-    hasFutureWatch = re.search(
-        r"\b(?:if|when|whenever)\b|\b(?:watch|monitor|look\s+out)\b",
-        userMessage,
-        flags=re.IGNORECASE,
-    ) is not None
-    return hasEmailSource and hasNotificationAction and hasFutureWatch
+def getConversationalReply(toolResults: list[dict[str, object]]) -> str | None:
+    """Return text from the typed no-action decision without another model call."""
+    for toolResult in toolResults:
+        if toolResult.get("toolName") != "respond" or toolResult.get("status") != "COMPLETE":
+            continue
+        responseText = toolResult.get("text")
+        if not isinstance(responseText, str) or not responseText.strip():
+            raise RuntimeError("Typed conversation response contained no text")
+        return responseText.strip()
+    return None
 
 
 def getUngroundedContextWriteFallback(
@@ -1583,22 +1472,6 @@ def formatCapabilityExecutionFailure(error: CapabilityExecutionError) -> str:
         f"{getCapabilityDisplayName(error.capabilityId)} is configured, but it is temporarily "
         f"unavailable after {error.attempts} technical attempts. No action was taken."
     )
-
-
-def getReadSourceClarification(namedReadTools: list[str]) -> str | None:
-    """Ask instead of choosing when a request explicitly names multiple read sources."""
-    if len(namedReadTools) <= 1:
-        return None
-    namedSources = {
-        "search_calendar": "Calendar",
-        "search_context": "personal context",
-        "search_documents": "managed documents",
-        "search_downloads": "Downloads",
-        "search_drive": "Google Drive",
-        "search_gmail": "Gmail",
-    }
-    sourceList = ", ".join(namedSources[toolName] for toolName in namedReadTools)
-    return f"Which source should I search: {sourceList}?"
 
 
 def getCapabilityDenialFallback(
@@ -1755,12 +1628,8 @@ def runToolAwareConversation(
         },
         *conversation,
     ]
-    namedReadTools = getNamedReadTools(userMessage)
-    sourceClarification = getReadSourceClarification(namedReadTools)
-    if sourceClarification is not None:
-        return sourceClarification
     hasExplicitGmailProposalIntent = hasConfirmedGmailDraft(conversation, userMessage)
-    initialToolChoice: str | dict[str, object] = "auto"
+    initialToolChoice: str | dict[str, object] = "required"
     if hasExplicitGmailProposalIntent:
         gmailToolName = (
             "request_gmail_approval"
@@ -1770,26 +1639,6 @@ def runToolAwareConversation(
         initialToolChoice = {
             "type": "function",
             "function": {"name": gmailToolName},
-        }
-    elif hasNaturalEmailWatchIntent(userMessage):
-        initialToolChoice = {
-            "type": "function",
-            "function": {"name": "remember_email_watch"},
-        }
-    elif hasNaturalCaseProposalIntent(userMessage):
-        initialToolChoice = {
-            "type": "function",
-            "function": {"name": "propose_case"},
-        }
-    elif hasExplicitContextWriteIntent(userMessage):
-        initialToolChoice = {
-            "type": "function",
-            "function": {"name": "remember_context"},
-        }
-    elif len(namedReadTools) == 1:
-        initialToolChoice = {
-            "type": "function",
-            "function": {"name": namedReadTools[0]},
         }
     initialResponse = postJson(
         MODEL_URL,
@@ -1806,14 +1655,16 @@ def runToolAwareConversation(
     assistantMessage = dict(initialResponse["choices"][0]["message"])
     toolCalls = assistantMessage.get("tool_calls")
     if not isinstance(toolCalls, list) or not toolCalls:
-        directContent = assistantMessage.get("content")
-        if not isinstance(directContent, str) or not directContent.strip():
-            raise RuntimeError("Sage returned neither a reply nor a tool call")
-        denialFallback = getCapabilityDenialFallback(directContent, [])
-        contextWriteFallback = getUngroundedContextWriteFallback(directContent, [])
-        return denialFallback or contextWriteFallback or directContent.strip()
-    if len(toolCalls) > 3:
-        raise RuntimeError("Sage selected too many tools in one turn")
+        raise RuntimeError("Sage returned no typed decision for a required tool turn")
+    if len(toolCalls) != 1:
+        raise RuntimeError("Sage must select exactly one initial typed decision")
+    selectedToolNames = {
+        toolCall.get("function", {}).get("name")
+        for toolCall in toolCalls
+        if isinstance(toolCall, dict) and isinstance(toolCall.get("function"), dict)
+    }
+    if "respond" in selectedToolNames and len(toolCalls) != 1:
+        raise RuntimeError("Sage combined a conversation response with another capability")
 
     selectedMutationCount = _countMutationCalls(toolCalls)
     if selectedMutationCount > 1:
@@ -1828,6 +1679,9 @@ def runToolAwareConversation(
         hasExplicitGmailProposalIntent,
     )
     allToolResults = list(toolResults)
+    conversationalReply = getConversationalReply(toolResults)
+    if conversationalReply is not None:
+        return conversationalReply
     pendingApprovalReply = getPendingApprovalReply(toolResults)
     if pendingApprovalReply is not None:
         return pendingApprovalReply
@@ -1895,7 +1749,14 @@ def runToolAwareConversation(
     contextWriteFallback = getUngroundedContextWriteFallback(
         finalContent, allToolResults
     )
-    return denialFallback or contextWriteFallback or finalContent.strip()
+    groundedReply = denialFallback or contextWriteFallback or finalContent.strip()
+    for toolResult in allToolResults:
+        if (
+            toolResult.get("toolName") == "research_web"
+            and toolResult.get("status") == "COMPLETE"
+        ):
+            return f"{groundedReply}\n\n{formatResearchSources(toolResult)}"
+    return groundedReply
 
 
 def sendTelegramMessage(
@@ -2444,13 +2305,6 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
         elif getCurrentMode() == "SLEEP":
             replyText = "Sage is sleeping. Use /normal or /eco when you need me."
             sendTelegramMessage(secrets, replyText)
-        elif (
-            sourceClarification := getReadSourceClarification(
-                getNamedReadTools(messageText)
-            )
-        ) is not None:
-            replyText = sourceClarification
-            sendTelegramMessage(secrets, replyText)
         else:
             replyText = createApprovalCard(secrets, messageText, f"telegram:{messageId}")
         if replyText is None and (
@@ -2458,14 +2312,6 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
         ) is not None:
             replyText = executeContextCommand(
                 secrets, contextCommand, f"telegram:{messageId}"
-            )
-            sendTelegramMessage(secrets, replyText)
-        if replyText is None and isSourceFollowup(messageText):
-            latestResearch = getLatestResearch()
-            replyText = (
-                formatResearchSources(latestResearch)
-                if latestResearch is not None
-                else "No previous research sources are available yet."
             )
             sendTelegramMessage(secrets, replyText)
         if replyText is None and (mailQuery := getMailQuery(messageText)) is not None:
@@ -2503,7 +2349,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
             sendTelegramMessage(secrets, replyText)
         if replyText is None:
             attachment = json.loads(attachmentJson) if attachmentJson else None
-            researchQuery = getResearchQuery(messageText, getPreviousUserMessage(messageId))
+            researchQuery = getResearchQuery(messageText)
             research: dict[str, object] | None = None
             if attachment is not None:
                 if getCurrentMode() == "ECO":

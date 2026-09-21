@@ -24,6 +24,8 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "forget_context",
         "remember_context",
         "remember_email_watch",
+        "research_web",
+        "respond",
         "propose_case",
         "search_calendar",
         "search_context",
@@ -73,11 +75,13 @@ def testValidatesPersonalContextTools():
     """Model-selected context operations stay inside fixed categories and safe identifiers."""
     assert validateToolArguments(
         "remember_context",
-        '{"category":"preferences","recordKey":"default-language","value":"English"}',
+        '{"category":"preferences","recordKey":"default-language","value":"English",'
+        '"evidenceText":"I prefer English"}',
     ) == {
         "category": "preferences",
         "recordKey": "default-language",
         "value": "English",
+        "evidenceText": "I prefer English",
     }
     assert validateToolArguments("search_context", '{"query":"language"}') == {
         "query": "language"
@@ -102,10 +106,12 @@ def testValidatesNaturalCaseProposalArguments():
     """Case proposals require a bounded title and a concrete objective."""
     assert validateToolArguments(
         "propose_case",
-        '{"title":"Software job search","objective":"Secure a software development role"}',
+        '{"title":"Software job search","objective":"Secure a software development role",'
+        '"evidenceText":"Create a case for my software job search"}',
     ) == {
         "title": "Software job search",
         "objective": "Secure a software development role",
+        "evidenceText": "Create a case for my software job search",
     }
 
     with pytest.raises(ValueError, match="title"):
@@ -125,24 +131,47 @@ def testValidatesStructuredEmailWatchArguments():
     assert validateToolArguments(
         "remember_email_watch",
         '{"recordKey":"hm-restock","label":"H&M restock",'
-        '"requiredTerms":["H&M","restock"]}',
+        '"requiredTerms":["H&M","restock"],'
+        '"evidenceText":"If I get an H&M restock email, notify me"}',
     ) == {
         "recordKey": "hm-restock",
         "label": "H&M restock",
         "requiredTerms": ["H&M", "restock"],
+        "evidenceText": "If I get an H&M restock email, notify me",
     }
 
     with pytest.raises(ValueError, match="terms"):
         validateToolArguments(
             "remember_email_watch",
-            '{"recordKey":"hm-restock","label":"H&M restock","requiredTerms":[]}',
+            '{"recordKey":"hm-restock","label":"H&M restock","requiredTerms":[],'
+            '"evidenceText":"notify me"}',
         )
     with pytest.raises(ValueError, match="key"):
         validateToolArguments(
             "remember_email_watch",
             '{"recordKey":"../escape","label":"H&M restock",'
-            '"requiredTerms":["H&M","restock"]}',
+            '"requiredTerms":["H&M","restock"],"evidenceText":"notify me"}',
         )
+
+
+def testValidatesTypedConversationResponse():
+    """Ordinary conversation is an explicit typed model decision, not unstructured output."""
+    assert validateToolArguments("respond", '{"text":"Hello, chief."}') == {
+        "text": "Hello, chief."
+    }
+
+    with pytest.raises(ValueError, match="response"):
+        validateToolArguments("respond", '{"text":""}')
+
+
+def testValidatesSemanticResearchRequest():
+    """Online research is selected through the same closed semantic gateway."""
+    assert validateToolArguments(
+        "research_web", '{"query":"current MLX releases"}'
+    ) == {"query": "current MLX releases"}
+
+    with pytest.raises(ValueError, match="query"):
+        validateToolArguments("research_web", '{"query":""}')
 
 
 def testValidatesGmailSendAndCalendarMutationArguments():

@@ -377,8 +377,8 @@ def testBuildsScheduledReportFromDurableOperationalContext(tmp_path, monkeypatch
     assert "Only use this snapshot" in reportContext
 
 
-def testRecognizesExplicitResearchCommand():
-    """Online research is deliberate and never inferred from ordinary conversation."""
+def testRecognizesOnlyExactResearchCommandBeforeSemanticRouting():
+    """Only slash syntax bypasses the semantic intent gateway."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
     moduleSpec = spec_from_file_location("sageTelegramDispatcherResearch", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
@@ -386,18 +386,9 @@ def testRecognizesExplicitResearchCommand():
     moduleSpec.loader.exec_module(dispatcher)
 
     assert dispatcher.getResearchQuery("/research current MLX releases") == "current MLX releases"
-    assert (
-        dispatcher.getResearchQuery("Can you look for small sling bags under 1500")
-        == "small sling bags under 1500"
-    )
-    assert dispatcher.getResearchQuery("Please search online for MLX releases") == "MLX releases"
-    assert (
-        dispatcher.getResearchQuery(
-            "You can do that now try it",
-            previousUserMessage="Can you look for small sling bags under 1500",
-        )
-        == "small sling bags under 1500"
-    )
+    assert dispatcher.getResearchQuery("Can you look for small sling bags under 1500") is None
+    assert dispatcher.getResearchQuery("Please search online for MLX releases") is None
+    assert dispatcher.getResearchQuery("You can do that now try it") is None
     assert dispatcher.getResearchQuery("what is new?") is None
     assert dispatcher.getResearchQuery("/research   ") is None
 
@@ -428,25 +419,9 @@ def testSearchesIndexedMailWithoutCallingGoogle(tmp_path, monkeypatch):
 
     assert dispatcher.getMailQuery("/mail@Hrudai_bot placement Friday") == "placement Friday"
     assert dispatcher.getMailQuery("/mail") == ""
-    assert dispatcher.getMailQuery("show my mail") == ""
-    assert dispatcher.getMailQuery("Check my mail for a recent H&M purchase") == "H&M purchase"
-    assert (
-        dispatcher.getMailQuery("Can you check for any mails regarding my recent H&M purchase")
-        == "H&M purchase"
-    )
-    assert dispatcher.getMailQuery("Please check my Gmail") == ""
-    assert (
-        dispatcher.getMailQuery("Can you check for any recent notifications from neon and inngest")
-        == "from:neon|from:inngest"
-    )
-    assert dispatcher.getMailQuery("Do I have any emails from Neon?") == "from:Neon"
-    assert dispatcher.getMailQuery("Find emails about placements") == "placements"
-    assert (
-        dispatcher.getMailQuery("Look for any assessment links in my mails")
-        == "assessment links"
-    )
-    assert dispatcher.getMailQuery("Search for invoices across my email") == "invoices"
-    assert dispatcher.getMailQuery("Show me my inbox") == ""
+    assert dispatcher.getMailQuery("show my mail") is None
+    assert dispatcher.getMailQuery("Check my mail for a recent H&M purchase") is None
+    assert dispatcher.getMailQuery("Do I have any emails from Neon?") is None
     mailReply = dispatcher.formatMailSearch(dispatcher.searchIndexedMail("placement Friday"))
 
     assert "personal-work" in mailReply
@@ -756,8 +731,8 @@ def testToolAwareConversationExecutesCallAndSynthesizesEvidence(monkeypatch):
     assert modelPayloads[1]["messages"][-1]["tool_call_id"] == "call-1"
 
 
-def testReadSourceInferenceForcesOneSourceAndAsksWhenMultiple(monkeypatch):
-    """Sage may infer a named read source but cannot silently choose between two."""
+def testSemanticGatewaySelectsReadSourceAndCanAskForClarification(monkeypatch):
+    """The model chooses a read capability or a typed clarification without regex routing."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
     moduleSpec = spec_from_file_location("sageTelegramReadInference", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
@@ -767,8 +742,25 @@ def testReadSourceInferenceForcesOneSourceAndAsksWhenMultiple(monkeypatch):
 
     def fakePostJson(url, payload, headers):
         modelPayloads.append(payload)
-        if len(modelPayloads) > 1:
+        if len(modelPayloads) == 2:
             return {"choices": [{"message": {"content": "No matching email was found."}}]}
+        if len(modelPayloads) == 3:
+            return {
+                "choices": [{
+                    "message": {
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "clarify-source",
+                            "function": {
+                                "name": "respond",
+                                "arguments": (
+                                    '{"text":"Which source should I search: Gmail or Google Drive?"}'
+                                ),
+                            },
+                        }],
+                    }
+                }]
+            }
         return {
             "choices": [{
                 "message": {
@@ -783,15 +775,22 @@ def testReadSourceInferenceForcesOneSourceAndAsksWhenMultiple(monkeypatch):
         }
 
     monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
-    monkeypatch.setattr(
-        dispatcher,
-        "executeSageTool",
-        lambda *arguments, **keywordArguments: {
-            "status": "COMPLETE",
-            "source": "gmail-index",
-            "results": [],
-        },
-    )
+    def fakeExecuteSageTool(
+        secrets,
+        toolName,
+        rawArguments,
+        userMessage,
+        requestKey="",
+        hasExplicitGmailProposalIntent=False,
+    ):
+        if toolName == "respond":
+            return {
+                "status": "COMPLETE",
+                "text": "Which source should I search: Gmail or Google Drive?",
+            }
+        return {"status": "COMPLETE", "source": "gmail-index", "results": []}
+
+    monkeypatch.setattr(dispatcher, "executeSageTool", fakeExecuteSageTool)
 
     dispatcher.runToolAwareConversation(
         {"SAGE_MODEL_API_KEY": "model"},
@@ -804,11 +803,9 @@ def testReadSourceInferenceForcesOneSourceAndAsksWhenMultiple(monkeypatch):
         "Search Gmail and Drive for assessment links",
     )
 
-    assert modelPayloads[0]["tool_choice"] == {
-        "type": "function",
-        "function": {"name": "search_gmail"},
-    }
-    assert ambiguousReply == "Which source should I search: Gmail, Google Drive?"
+    assert modelPayloads[0]["tool_choice"] == "required"
+    assert modelPayloads[2]["tool_choice"] == "required"
+    assert ambiguousReply == "Which source should I search: Gmail or Google Drive?"
 
 
 def testFalseCapabilityDenialFallsBackToGroundedToolEvidence(monkeypatch):
@@ -841,47 +838,140 @@ def testFalseCapabilityDenialFallsBackToGroundedToolEvidence(monkeypatch):
     assert "cannot access" not in reply
 
 
-def testStandingInstructionIsExplicitContextWriteIntent():
-    """An explicit always/from-now-on directive can be persisted without a magic phrase."""
+def testOrdinaryConversationRequiresTypedRespondDecision(monkeypatch):
+    """Every natural-language turn is routed semantically without phrase detectors."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
-    moduleSpec = spec_from_file_location("sageTelegramStandingRule", dispatcherPath)
+    moduleSpec = spec_from_file_location("sageTelegramSemanticGateway", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    modelPayloads = []
+
+    def fakePostJson(url, payload, headers):
+        modelPayloads.append(payload)
+        return {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "respond-1",
+                        "function": {
+                            "name": "respond",
+                            "arguments": '{"text":"Hello, chief."}',
+                        },
+                    }],
+                }
+            }]
+        }
+
+    monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
+
+    reply = dispatcher.runToolAwareConversation(
+        {"SAGE_MODEL_API_KEY": "model"},
+        [{"role": "user", "content": "How are you today?"}],
+        "How are you today?",
+    )
+
+    assert reply == "Hello, chief."
+    assert len(modelPayloads) == 1
+    assert modelPayloads[0]["tool_choice"] == "required"
+
+
+def testSemanticGatewayRejectsMultipleInitialDecisions(monkeypatch):
+    """One user turn cannot produce competing initial intent classifications."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramSingleDecision", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
     dispatcher = module_from_spec(moduleSpec)
     moduleSpec.loader.exec_module(dispatcher)
 
-    assert dispatcher.hasExplicitContextWriteIntent(
-        "Always notify me about placement-related emails"
+    monkeypatch.setattr(
+        dispatcher,
+        "postJson",
+        lambda url, payload, headers: {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "gmail-1",
+                            "function": {
+                                "name": "search_gmail",
+                                "arguments": '{"query":"assessment"}',
+                            },
+                        },
+                        {
+                            "id": "drive-1",
+                            "function": {
+                                "name": "search_drive",
+                                "arguments": '{"query":"assessment"}',
+                            },
+                        },
+                    ],
+                }
+            }]
+        },
     )
-    assert dispatcher.hasExplicitContextWriteIntent(
-        "From now on, use DD/MM/YYYY dates"
-    )
-    assert not dispatcher.hasExplicitContextWriteIntent(
-        "I always read placement emails in the morning"
+    monkeypatch.setattr(
+        dispatcher,
+        "executeSageTool",
+        lambda *arguments, **keywordArguments: {
+            "status": "COMPLETE",
+            "results": [],
+        },
     )
 
+    with pytest.raises(RuntimeError, match="exactly one initial"):
+        dispatcher.runToolAwareConversation(
+            {"SAGE_MODEL_API_KEY": "model"},
+            [{"role": "user", "content": "Search Gmail and Drive"}],
+            "Search Gmail and Drive",
+        )
 
-def testDirectNaturalPreferenceIsExplicitContextWriteIntent():
-    """First-person preferences and direct assistant-style requests are save intent."""
+
+def testSemanticGatewayRejectsUngroundedMutationEvidence(monkeypatch):
+    """A model-selected write cannot proceed unless its evidence is in the user message."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
-    moduleSpec = spec_from_file_location("sageTelegramNaturalPreference", dispatcherPath)
+    moduleSpec = spec_from_file_location("sageTelegramGroundedMutation", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
     dispatcher = module_from_spec(moduleSpec)
     moduleSpec.loader.exec_module(dispatcher)
 
-    assert dispatcher.hasExplicitContextWriteIntent(
-        "I prefer concise answers with enough context"
+    result = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "remember_context",
+        '{"category":"preferences","recordKey":"tone","value":"Formal",'
+        '"evidenceText":"I prefer formal replies"}',
+        "Tell me a joke",
+        "telegram:grounding-1",
     )
-    assert dispatcher.hasExplicitContextWriteIntent("Please call me chief")
-    assert dispatcher.hasExplicitContextWriteIntent(
-        "I don't like vague notifications"
+
+    assert result["status"] == "REJECTED"
+    assert "evidence" in str(result["error"]).casefold()
+
+
+def testGroundedEvidenceAcceptsOneModelAddedQuotePair():
+    """Quoted tool arguments may wrap, but may not alter, the user's exact words."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramQuotedEvidence", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+
+    assert dispatcher.hasGroundedEvidence(
+        "Please keep track of my software job hunt as a case.",
+        '"Please keep track of my software job hunt as a case."',
     )
-    assert not dispatcher.hasExplicitContextWriteIntent(
-        "Do you prefer email or Telegram?"
+    assert not dispatcher.hasGroundedEvidence(
+        "Please keep track of my software job hunt as a case.",
+        '"Please keep track of my software job hunt and send applications as a case."',
     )
 
 
-def testNaturalPreferenceForcesGroundedContextWrite(monkeypatch):
-    """A direct preference must use the persistence tool before Sage claims it was saved."""
+def testNaturalPreferenceUsesSemanticGatewayAndGroundedContextWrite(monkeypatch):
+    """The model classifies a preference while code requires exact intent evidence."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
     moduleSpec = spec_from_file_location("sageTelegramPreferenceWrite", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
@@ -905,7 +995,8 @@ def testNaturalPreferenceForcesGroundedContextWrite(monkeypatch):
                                 "arguments": (
                                     '{"category":"preferences",'
                                     '"recordKey":"response-detail",'
-                                    '"value":"Concise answers with enough context"}'
+                                    '"value":"Concise answers with enough context",'
+                                    '"evidenceText":"I prefer concise answers with enough context"}'
                                 ),
                             },
                         }],
@@ -936,36 +1027,12 @@ def testNaturalPreferenceForcesGroundedContextWrite(monkeypatch):
     )
 
     assert reply == "Saved your preference."
-    assert modelPayloads[0]["tool_choice"] == {
-        "type": "function",
-        "function": {"name": "remember_context"},
-    }
+    assert modelPayloads[0]["tool_choice"] == "required"
     assert executedTools == ["remember_context"]
 
 
-def testNaturalEmailWatchIntentRecognizesConditionalNotificationRule():
-    """A direct incoming-mail condition is an operational watch request, not small talk."""
-    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
-    moduleSpec = spec_from_file_location("sageTelegramEmailWatchIntent", dispatcherPath)
-    assert moduleSpec is not None and moduleSpec.loader is not None
-    dispatcher = module_from_spec(moduleSpec)
-    moduleSpec.loader.exec_module(dispatcher)
-
-    exactMessage = (
-        "I have set an alert on H&M for an item restock. "
-        "If I get a mail regarding that notify me immediately"
-    )
-    assert dispatcher.hasNaturalEmailWatchIntent(exactMessage)
-    assert dispatcher.hasNaturalEmailWatchIntent(
-        "Watch my email for Neon billing alerts and let me know immediately"
-    )
-    assert not dispatcher.hasNaturalEmailWatchIntent(
-        "Can you notify me when the deployment finishes?"
-    )
-
-
-def testNaturalEmailWatchForcesStructuredWrite(monkeypatch):
-    """A mail watch request must force the structured rule tool and accept its receipt."""
+def testNaturalEmailWatchUsesSemanticGatewayAndStructuredWrite(monkeypatch):
+    """The model classifies a mail watch while code validates its quoted terms."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
     moduleSpec = spec_from_file_location("sageTelegramEmailWatchWrite", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
@@ -988,7 +1055,9 @@ def testNaturalEmailWatchForcesStructuredWrite(monkeypatch):
                                 "name": "remember_email_watch",
                                 "arguments": (
                                     '{"recordKey":"hm-restock","label":"H&M restock",'
-                                    '"requiredTerms":["H&M","restock"]}'
+                                    '"requiredTerms":["H&M","restock"],'
+                                    '"evidenceText":"I have set an alert on H&M for an item restock. '
+                                    'If I get a mail regarding that notify me immediately"}'
                                 ),
                             },
                         }],
@@ -1023,10 +1092,7 @@ def testNaturalEmailWatchForcesStructuredWrite(monkeypatch):
     )
 
     assert reply == "Saved the email watch rule."
-    assert modelPayloads[0]["tool_choice"] == {
-        "type": "function",
-        "function": {"name": "remember_email_watch"},
-    }
+    assert modelPayloads[0]["tool_choice"] == "required"
     assert executedTools == ["remember_email_watch"]
 
 
@@ -1050,7 +1116,8 @@ def testEmailWatchToolStoresStructuredUserRule(monkeypatch):
         {"SAGE_PROPOSAL_TOKEN": "proposal"},
         "remember_email_watch",
         '{"recordKey":"hm-restock","label":"H&M restock",'
-        '"requiredTerms":["H&M","restock"]}',
+        '"requiredTerms":["H&M","restock"],'
+        '"evidenceText":"If I get an H&M restock email, notify me immediately"}',
         messageText,
         "telegram:watch-1",
     )
@@ -1070,30 +1137,8 @@ def testEmailWatchToolStoresStructuredUserRule(monkeypatch):
     }
 
 
-def testNaturalCaseRequestIsRecognizedWithoutSlashCommand():
-    """Ordinary explicit wording can request a case while discussion remains non-mutating."""
-    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
-    moduleSpec = spec_from_file_location("sageTelegramNaturalCaseIntent", dispatcherPath)
-    assert moduleSpec is not None and moduleSpec.loader is not None
-    dispatcher = module_from_spec(moduleSpec)
-    moduleSpec.loader.exec_module(dispatcher)
-
-    assert dispatcher.hasNaturalCaseProposalIntent(
-        "Create a case for my software job search"
-    )
-    assert dispatcher.hasNaturalCaseProposalIntent(
-        "Track my placement preparation as a case"
-    )
-    assert not dispatcher.hasNaturalCaseProposalIntent(
-        "That is an interesting legal case"
-    )
-    assert not dispatcher.hasNaturalCaseProposalIntent(
-        "Make a case for why Python is the better choice"
-    )
-
-
-def testNaturalCaseRequestForcesApprovalProposal(monkeypatch):
-    """A natural case request must enter the trusted approval path."""
+def testNaturalCaseRequestUsesSemanticGatewayAndApprovalProposal(monkeypatch):
+    """The model classifies a case request while code keeps approval authoritative."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
     moduleSpec = spec_from_file_location("sageTelegramNaturalCaseProposal", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
@@ -1115,7 +1160,8 @@ def testNaturalCaseRequestForcesApprovalProposal(monkeypatch):
                             "name": "propose_case",
                             "arguments": (
                                 '{"title":"Software job search",'
-                                '"objective":"Secure a software development role"}'
+                                '"objective":"Secure a software development role",'
+                                '"evidenceText":"Create a case for my software job search"}'
                             ),
                         },
                     }],
@@ -1148,10 +1194,7 @@ def testNaturalCaseRequestForcesApprovalProposal(monkeypatch):
     )
 
     assert reply == "Approval card sent. No case exists until approval."
-    assert modelPayloads[0]["tool_choice"] == {
-        "type": "function",
-        "function": {"name": "propose_case"},
-    }
+    assert modelPayloads[0]["tool_choice"] == "required"
     assert executedTools == ["propose_case"]
 
 
@@ -1179,7 +1222,8 @@ def testCaseToolCreatesOnlyAnApprovalRequest(monkeypatch):
     result = dispatcher.executeSageTool(
         {},
         "propose_case",
-        '{"title":"Software job search","objective":"Secure a developer role"}',
+        '{"title":"Software job search","objective":"Secure a developer role",'
+        '"evidenceText":"Please create a case for my software job search"}',
         "Please create a case for my software job search",
         "telegram:case-1",
     )
@@ -1287,14 +1331,16 @@ def testContextToolUsesDirectStandardWriteAndApprovalForSensitiveWrite(monkeypat
     standardResult = dispatcher.executeSageTool(
         {"SAGE_PROPOSAL_TOKEN": "proposal"},
         "remember_context",
-        '{"category":"preferences","recordKey":"language","value":"English"}',
+        '{"category":"preferences","recordKey":"language","value":"English",'
+        '"evidenceText":"Remember that my language is English"}',
         "Remember that my language is English",
         "telegram:301",
     )
     sensitiveResult = dispatcher.executeSageTool(
         {"SAGE_PROPOSAL_TOKEN": "proposal"},
         "remember_context",
-        '{"category":"identity","recordKey":"legal-name","value":"Test User"}',
+        '{"category":"identity","recordKey":"legal-name","value":"Test User",'
+        '"evidenceText":"Remember that my legal name is Test User"}',
         "Remember that my legal name is Test User",
         "telegram:302",
     )
@@ -1335,7 +1381,20 @@ def testConfirmedContextIsInjectedIntoEveryOrdinaryModelTurn(tmp_path, monkeypat
 
     def fakePostJson(url, payload, headers):
         modelPayloads.append(payload)
-        return {"choices": [{"message": {"content": "Hello"}}]}
+        return {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "respond-context",
+                        "function": {
+                            "name": "respond",
+                            "arguments": '{"text":"Hello"}',
+                        },
+                    }],
+                }
+            }]
+        }
 
     monkeypatch.setattr(dispatcher, "postJson", fakePostJson)
 
@@ -1881,7 +1940,7 @@ def testSearchesDownloadsAndImportsOnlyThroughCoreCopyBoundary(tmp_path, monkeyp
 
 
 def testFormatsVerifiedResearchLinksWithoutModelRewriting():
-    """Research URLs are appended deterministically and can be recalled without a new search."""
+    """Research URLs are appended deterministically outside model generation."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
     moduleSpec = spec_from_file_location("sageTelegramDispatcherLinks", dispatcherPath)
     assert moduleSpec is not None and moduleSpec.loader is not None
@@ -1894,7 +1953,6 @@ def testFormatsVerifiedResearchLinksWithoutModelRewriting():
         ]
     }
 
-    assert dispatcher.isSourceFollowup("Can you give me the links")
     assert dispatcher.formatResearchSources(research) == (
         "Sources:\n[1] Example One — https://example.com/one\n"
         "[2] Example Two — https://example.com/two"
@@ -1994,7 +2052,20 @@ def testEcoStartsAndStopsSageAroundOneMessage(tmp_path, monkeypatch):
     monkeypatch.setattr(
         dispatcher,
         "postJson",
-        lambda url, payload, headers: {"choices": [{"message": {"content": "ready"}}]},
+        lambda url, payload, headers: {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "respond-eco",
+                        "function": {
+                            "name": "respond",
+                            "arguments": '{"text":"ready"}',
+                        },
+                    }],
+                }
+            }]
+        },
     )
 
     assert dispatcher.dispatchNextMessage(

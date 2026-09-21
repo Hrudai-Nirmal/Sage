@@ -32,6 +32,34 @@ def getToolDefinitions() -> list[dict[str, object]]:
         {
             "type": "function",
             "function": {
+                "name": "respond",
+                "description": (
+                    "Reply conversationally when no configured capability should run. "
+                    "Use this for questions, discussion, clarification, and ordinary chat."
+                ),
+                "parameters": _objectSchema(
+                    {"text": {"type": "string", "minLength": 1, "maxLength": 10000}},
+                    ["text"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "research_web",
+                "description": (
+                    "Search current public web sources when the user asks for online research, "
+                    "current information, verification, or source-backed recommendations."
+                ),
+                "parameters": _objectSchema(
+                    {"query": {"type": "string", "minLength": 1, "maxLength": 2000}},
+                    ["query"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_gmail",
                 "description": (
                     "Search the user's connected Gmail index across all four accounts. "
@@ -121,8 +149,14 @@ def getToolDefinitions() -> list[dict[str, object]]:
                             "pattern": r"^[a-z0-9][a-z0-9._-]*$",
                         },
                         "value": {"type": "string", "minLength": 1, "maxLength": 10000},
+                        "evidenceText": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "An exact quote from the current user message proving write intent.",
+                        },
                     },
-                    ["category", "recordKey", "value"],
+                    ["category", "recordKey", "value", "evidenceText"],
                 ),
             },
         },
@@ -150,8 +184,14 @@ def getToolDefinitions() -> list[dict[str, object]]:
                             "minItems": 1,
                             "maxItems": 8,
                         },
+                        "evidenceText": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "An exact quote from the current user message requesting this watch.",
+                        },
                     },
-                    ["recordKey", "label", "requiredTerms"],
+                    ["recordKey", "label", "requiredTerms", "evidenceText"],
                 ),
             },
         },
@@ -186,8 +226,14 @@ def getToolDefinitions() -> list[dict[str, object]]:
                             "minLength": 1,
                             "maxLength": 10_000,
                         },
+                        "evidenceText": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "An exact quote from the current user message requesting a case.",
+                        },
                     },
-                    ["title", "objective"],
+                    ["title", "objective", "evidenceText"],
                 ),
             },
         },
@@ -423,6 +469,20 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
     if not isinstance(arguments, dict):
         raise ValueError("Tool arguments JSON must be an object")
 
+    if toolName == "respond":
+        _rejectUnknownKeys(arguments, {"text"})
+        responseText = arguments.get("text")
+        if not isinstance(responseText, str) or not responseText.strip() or len(responseText) > 10_000:
+            raise ValueError("Conversation response must be between 1 and 10000 characters")
+        return {"text": responseText.strip()}
+
+    if toolName == "research_web":
+        _rejectUnknownKeys(arguments, {"query"})
+        researchQuery = arguments.get("query")
+        if not isinstance(researchQuery, str) or not researchQuery.strip() or len(researchQuery) > 2_000:
+            raise ValueError("Research query must be between 1 and 2000 characters")
+        return {"query": researchQuery.strip()}
+
     if toolName.startswith("search_"):
         _rejectUnknownKeys(arguments, {"query"})
         query = arguments.get("query")
@@ -445,27 +505,32 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
         return {"relativePath": relativePath.strip()}
 
     if toolName == "remember_context":
-        _rejectUnknownKeys(arguments, {"category", "recordKey", "value"})
+        _rejectUnknownKeys(arguments, {"category", "recordKey", "value", "evidenceText"})
         category = arguments.get("category")
         recordKey = arguments.get("recordKey")
         value = arguments.get("value")
+        evidenceText = arguments.get("evidenceText")
         if category not in CONTEXT_CATEGORIES:
             raise ValueError("Context category is not supported")
         if not isinstance(recordKey, str) or CONTEXT_KEY_PATTERN.fullmatch(recordKey) is None:
             raise ValueError("Context key must be a lowercase safe identifier")
         if not isinstance(value, str) or not value.strip() or len(value) > 10_000:
             raise ValueError("Context value must be between 1 and 10000 characters")
+        if not isinstance(evidenceText, str) or not evidenceText.strip() or len(evidenceText) > 2_000:
+            raise ValueError("Context evidence must be between 1 and 2000 characters")
         return {
             "category": str(category),
             "recordKey": recordKey,
             "value": value.strip(),
+            "evidenceText": evidenceText.strip(),
         }
 
     if toolName == "remember_email_watch":
-        _rejectUnknownKeys(arguments, {"recordKey", "label", "requiredTerms"})
+        _rejectUnknownKeys(arguments, {"recordKey", "label", "requiredTerms", "evidenceText"})
         recordKey = arguments.get("recordKey")
         label = arguments.get("label")
         requiredTerms = arguments.get("requiredTerms")
+        evidenceText = arguments.get("evidenceText")
         if not isinstance(recordKey, str) or CONTEXT_KEY_PATTERN.fullmatch(recordKey) is None:
             raise ValueError("Email watch key must be a lowercase safe identifier")
         if not isinstance(label, str) or not label.strip() or len(label) > 500:
@@ -480,10 +545,13 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
         ):
             raise ValueError("Email watch terms must contain between 1 and 8 short phrases")
         normalizedTerms = list(dict.fromkeys(str(term).strip() for term in requiredTerms))
+        if not isinstance(evidenceText, str) or not evidenceText.strip() or len(evidenceText) > 2_000:
+            raise ValueError("Email watch evidence must be between 1 and 2000 characters")
         return {
             "recordKey": recordKey,
             "label": label.strip(),
             "requiredTerms": normalizedTerms,
+            "evidenceText": evidenceText.strip(),
         }
 
     if toolName == "forget_context":
@@ -494,9 +562,10 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
         return {"recordId": recordId.strip()}
 
     if toolName == "propose_case":
-        _rejectUnknownKeys(arguments, {"title", "objective"})
+        _rejectUnknownKeys(arguments, {"title", "objective", "evidenceText"})
         title = arguments.get("title")
         objective = arguments.get("objective")
+        evidenceText = arguments.get("evidenceText")
         if not isinstance(title, str) or not title.strip() or len(title) > 500:
             raise ValueError("Case title must be between 1 and 500 characters")
         if (
@@ -505,7 +574,13 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
             or len(objective) > 10_000
         ):
             raise ValueError("Case objective must be between 1 and 10000 characters")
-        return {"title": title.strip(), "objective": objective.strip()}
+        if not isinstance(evidenceText, str) or not evidenceText.strip() or len(evidenceText) > 2_000:
+            raise ValueError("Case evidence must be between 1 and 2000 characters")
+        return {
+            "title": title.strip(),
+            "objective": objective.strip(),
+            "evidenceText": evidenceText.strip(),
+        }
 
     if toolName in {
         "draft_gmail_message",

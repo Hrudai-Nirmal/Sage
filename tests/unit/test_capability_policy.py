@@ -10,7 +10,6 @@ from sage_core.capability_policy import (
     getCapabilityAwarenessPrompt,
     getCapabilityPolicies,
     getDeniedCapabilityId,
-    getNamedReadTools,
 )
 from sage_core.tool_registry import getToolDefinitions
 
@@ -114,17 +113,6 @@ def testNonIdempotentExternalWriteIsNeverRetried():
 
     assert attempts == [1]
     assert failure.value.attempts == 1
-
-
-def testNamedReadSourcesAreInferredButAmbiguityIsPreserved():
-    """The broker may infer one read source but must not choose between named sources."""
-    assert getNamedReadTools("Check my Gmail for assessment links") == ["search_gmail"]
-    assert getNamedReadTools("Find my resume in Drive") == ["search_drive"]
-    assert getNamedReadTools("Search Gmail and Drive for an invoice") == [
-        "search_gmail",
-        "search_drive",
-    ]
-    assert getNamedReadTools("Draft an email to my professor") == []
 
 
 def testConfiguredCapabilityDenialsAreDetectedForDeterministicReplacement():

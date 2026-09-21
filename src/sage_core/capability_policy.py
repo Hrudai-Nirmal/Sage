@@ -38,6 +38,13 @@ class CapabilityExecutionError(RuntimeError):
 def getCapabilityPolicies() -> dict[str, CapabilityPolicy]:
     """Return Sage's complete code-owned capability and authority catalog."""
     policyRows = [
+        (
+            "conversation.respond",
+            "Reply without running an external or persistent capability",
+            "automatic; no external state change",
+            False,
+            "respond",
+        ),
         ("gmail.search", "Search four connected Gmail accounts", "automatic read", True, "search_gmail"),
         (
             "gmail.watch.remember",
@@ -71,7 +78,13 @@ def getCapabilityPolicies() -> dict[str, CapabilityPolicy]:
         ("drive.create_folder", "Create a Google Drive folder", "explicit non-idempotent write without an approval button", False, "create_drive_folder"),
         ("drive.rename", "Rename an exact Google Drive item", "explicit non-idempotent write without an approval button", False, "rename_drive_file"),
         ("drive.delete", "Delete an exact Google Drive item", "requires the user's approval button", False, "delete_drive_file"),
-        ("online.research", "Search and extract current public web sources", "automatic read when research intent is explicit", True, None),
+        (
+            "online.research",
+            "Search and extract current public web sources",
+            "automatic read when research intent is explicit",
+            True,
+            "research_web",
+        ),
         ("tasks.propose", "Propose a task", "requires the user's approval button", True, None),
         (
             "cases.propose",
@@ -137,30 +150,6 @@ def executeCapability(
                 raise CapabilityExecutionError(policy.capabilityId, attemptNumber) from error
             wait(attemptNumber)
     raise RuntimeError("Capability retry loop ended unexpectedly")
-
-
-def getNamedReadTools(messageText: str) -> list[str]:
-    """Return explicitly named read sources without deciding among multiple matches."""
-    if not isinstance(messageText, str) or not re.search(
-        r"\b(?:check|search|find|show|scan|look|read|list|fetch|retrieve|what|which|"
-        r"do\s+i\s+have|did\s+i\s+get)\b",
-        messageText,
-        flags=re.IGNORECASE,
-    ):
-        return []
-    sourcePatterns = [
-        ("search_gmail", r"\b(?:gmail|e-?mails?|mails?|inbox)\b"),
-        ("search_calendar", r"\b(?:calendar|events?|meetings?|appointments?)\b"),
-        ("search_drive", r"\b(?:google\s+drive|drive)\b"),
-        ("search_downloads", r"\bdownloads?\b"),
-        ("search_documents", r"\b(?:managed\s+documents?|sage\s+documents?)\b"),
-        ("search_context", r"\b(?:context|memor(?:y|ies)|remembered\s+facts?)\b"),
-    ]
-    return [
-        toolName
-        for toolName, sourcePattern in sourcePatterns
-        if re.search(sourcePattern, messageText, flags=re.IGNORECASE)
-    ]
 
 
 def getCapabilityDisplayName(capabilityId: str) -> str:
