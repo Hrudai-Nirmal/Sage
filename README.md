@@ -94,6 +94,8 @@ Gmail polling never marks email read or changes labels/archives; outbound mail r
 
 n8n stores failed runs for diagnosis but skips successful poll payloads. Its built-in retention keeps no more than 1,000 executions or seven days and continuously removes expired execution data to prevent local database buildup.
 
+The static Google OAuth disclosure site under `site/` publishes Sage's homepage, privacy policy, terms, and Limited Use statement at `https://sage.hrudainirmal.in`. It is intentionally separate from the local application and contains no tracking or connection to private Sage data.
+
 Send a photo, JPEG/PNG/WebP document, or PDF in Main for Iris-assisted analysis. PDFs currently analyze the first rendered page. Telegram-reported sizes are checked when present and downloaded bytes are always capped at 20 MB; temporary files are deleted after the request.
 
 Create approval-gated scheduled work with:
