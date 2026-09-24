@@ -11,6 +11,7 @@ from sage_core.audit_state import AuditStateRepository
 from sage_core.context_state import ContextStateRepository
 from sage_core.database import SageDatabase
 from sage_core.email_draft_state import EmailDraftStateRepository
+from sage_core.work_state import WorkStateRepository
 
 
 class ApprovalStateRepository:
@@ -24,6 +25,7 @@ class ApprovalStateRepository:
             database, dataRoot or database.databasePath.parent.parent
         )
         self.emailDraftStateRepository = EmailDraftStateRepository(database)
+        self.workStateRepository = WorkStateRepository(database)
 
     def createProposal(
         self,
@@ -99,6 +101,7 @@ class ApprovalStateRepository:
 
             actionType, expiresAt, payloadJson, status = approvalRow
             supportedActions = {
+                "ARCHIVE_WORK_ITEM",
                 "CREATE_CASE",
                 "CREATE_TASK",
                 "CREATE_SCHEDULE",
@@ -130,7 +133,14 @@ class ApprovalStateRepository:
                 """,
                 (approvedBy, approvalId),
             )
-            if actionType == "CREATE_TASK":
+            if actionType == "ARCHIVE_WORK_ITEM":
+                self.workStateRepository.archiveWorkItem(
+                    workItemKind=str(taskPayload["workItemKind"]),
+                    workItemId=str(taskPayload["workItemId"]),
+                    actor=approvedBy,
+                    connection=connection,
+                )
+            elif actionType == "CREATE_TASK":
                 connection.execute(
                     """
                     INSERT INTO tasks (

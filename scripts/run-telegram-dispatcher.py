@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import time
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -51,6 +52,9 @@ IRIS_MODEL_ID = str(DATA_ROOT / "models" / "qwen3-vl-2b-instruct-4bit")
 CORE_URL = "http://127.0.0.1:8787"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MUTATION_TOOL_NAMES = {
+    "add_case_milestone",
+    "add_case_note",
+    "archive_work_item",
     "create_calendar_event",
     "create_drive_folder",
     "delete_calendar_event",
@@ -59,6 +63,8 @@ MUTATION_TOOL_NAMES = {
     "forget_context",
     "import_download_file",
     "propose_case",
+    "propose_schedule",
+    "propose_task",
     "remember_context",
     "remember_email_watch",
     "rename_drive_file",
@@ -66,6 +72,8 @@ MUTATION_TOOL_NAMES = {
     "revise_gmail_draft",
     "send_gmail_message",
     "update_calendar_event",
+    "update_case_milestone",
+    "update_work_item",
 }
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -664,6 +672,25 @@ def executeSageTool(
             "source": "confirmed-personal-context",
             "results": getContextRepository().searchRecords(str(arguments["query"])),
         }
+    if toolName == "search_work_items":
+        queryString = urlencode(
+            {
+                "kind": arguments["workItemKind"],
+                "query": arguments["query"],
+                "resultLimit": 20,
+            }
+        )
+        return {
+            "status": "COMPLETE",
+            "source": "work-items",
+            "results": getJson(f"{CORE_URL}/v1/work-items?{queryString}", {}),
+        }
+    if toolName == "get_case_details":
+        return {
+            "status": "COMPLETE",
+            "source": "work-state",
+            "record": getJson(f"{CORE_URL}/v1/cases/{arguments['caseId']}", {}),
+        }
     if toolName == "remember_context":
         if not hasGroundedEvidence(userMessage, str(arguments["evidenceText"])):
             return {
@@ -769,6 +796,113 @@ def executeSageTool(
             casePayload,
             f"Case: {arguments['title']}\nObjective: {arguments['objective']}",
             f"{requestKey}:CREATE_CASE" if requestKey else "",
+        )
+        return {"status": "PENDING_APPROVAL", "result": approvalText}
+    if toolName == "propose_task":
+        if not hasGroundedEvidence(userMessage, str(arguments["evidenceText"])):
+            return {
+                "status": "REJECTED",
+                "error": "Task-proposal evidence was not found in the current user message.",
+            }
+        taskPayload = {
+            fieldName: fieldValue
+            for fieldName, fieldValue in arguments.items()
+            if fieldName != "evidenceText"
+        }
+        approvalText = sendApprovalRequest(
+            secrets,
+            "CREATE_TASK",
+            taskPayload,
+            f"Task: {arguments['title']}\nPriority: {arguments['priority']}",
+            f"{requestKey}:CREATE_TASK" if requestKey else "",
+        )
+        return {"status": "PENDING_APPROVAL", "result": approvalText}
+    if toolName == "propose_schedule":
+        if not hasGroundedEvidence(userMessage, str(arguments["evidenceText"])):
+            return {
+                "status": "REJECTED",
+                "error": "Schedule-proposal evidence was not found in the current user message.",
+            }
+        schedulePayload = {
+            fieldName: fieldValue
+            for fieldName, fieldValue in arguments.items()
+            if fieldName != "evidenceText"
+        }
+        approvalText = sendApprovalRequest(
+            secrets,
+            "CREATE_SCHEDULE",
+            schedulePayload,
+            (
+                f"{arguments['kind'].title()}: {arguments['title']}\n"
+                f"First run: {arguments['dueAt']}\n"
+                f"Recurrence: {arguments['recurrence'] or 'ONCE'}"
+            ),
+            f"{requestKey}:CREATE_SCHEDULE" if requestKey else "",
+        )
+        return {"status": "PENDING_APPROVAL", "result": approvalText}
+    if toolName in {
+        "update_work_item",
+        "add_case_note",
+        "add_case_milestone",
+        "update_case_milestone",
+        "archive_work_item",
+    }:
+        if not hasGroundedEvidence(userMessage, str(arguments["evidenceText"])):
+            return {
+                "status": "REJECTED",
+                "error": "Work-lifecycle evidence was not found in the current user message.",
+            }
+        proposalHeaders = {
+            "Content-Type": "application/json",
+            "X-Sage-Proposal-Token": secrets["SAGE_PROPOSAL_TOKEN"],
+        }
+        if toolName == "update_work_item":
+            endpointFamily = {
+                "TASK": "tasks",
+                "CASE": "cases",
+                "SCHEDULE": "schedules",
+            }[str(arguments["workItemKind"])]
+            record = patchJson(
+                f"{CORE_URL}/v1/{endpointFamily}/{arguments['workItemId']}",
+                dict(arguments["changes"]),
+                proposalHeaders,
+            )
+            return {"status": "COMPLETE", "source": "work-state", "record": record}
+        if toolName == "add_case_note":
+            record = postJson(
+                f"{CORE_URL}/v1/cases/{arguments['caseId']}/notes",
+                {"text": arguments["text"]},
+                proposalHeaders,
+            )
+            return {"status": "COMPLETE", "source": "work-state", "record": record}
+        if toolName == "add_case_milestone":
+            record = postJson(
+                f"{CORE_URL}/v1/cases/{arguments['caseId']}/milestones",
+                {"title": arguments["title"], "dueAt": arguments["dueAt"]},
+                proposalHeaders,
+            )
+            return {"status": "COMPLETE", "source": "work-state", "record": record}
+        if toolName == "update_case_milestone":
+            record = patchJson(
+                (
+                    f"{CORE_URL}/v1/cases/{arguments['caseId']}/milestones/"
+                    f"{arguments['milestoneId']}"
+                ),
+                dict(arguments["changes"]),
+                proposalHeaders,
+            )
+            return {"status": "COMPLETE", "source": "work-state", "record": record}
+        archivePayload = {
+            "workItemKind": arguments["workItemKind"],
+            "workItemId": arguments["workItemId"],
+            "title": arguments["title"],
+        }
+        approvalText = sendApprovalRequest(
+            secrets,
+            "ARCHIVE_WORK_ITEM",
+            archivePayload,
+            f"Archive {str(arguments['workItemKind']).lower()}: {arguments['title']}",
+            f"{requestKey}:ARCHIVE_WORK_ITEM" if requestKey else "",
         )
         return {"status": "PENDING_APPROVAL", "result": approvalText}
     if toolName == "forget_context":
@@ -1333,6 +1467,22 @@ def getSecretValues() -> dict[str, str]:
 def postJson(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
     """Send one authenticated JSON request without logging private request data."""
     request = Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+    with urlopen(request, timeout=180) as response:
+        return json.loads(response.read())
+
+
+def getJson(url: str, headers: dict[str, str]) -> object:
+    """Read one JSON resource without logging its private response body."""
+    request = Request(url, headers=headers, method="GET")
+    with urlopen(request, timeout=180) as response:
+        return json.loads(response.read())
+
+
+def patchJson(
+    url: str, payload: dict[str, object], headers: dict[str, str]
+) -> dict[str, object]:
+    """Apply one authenticated JSON merge through Core's constrained interface."""
+    request = Request(url, data=json.dumps(payload).encode(), headers=headers, method="PATCH")
     with urlopen(request, timeout=180) as response:
         return json.loads(response.read())
 

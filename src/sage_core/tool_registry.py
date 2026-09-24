@@ -28,6 +28,16 @@ def getToolDefinitions() -> list[dict[str, object]]:
         "type": "string",
         "enum": ["personal-work", "work", "personal", "college"],
     }
+    workItemKindSchema = {
+        "type": "string",
+        "enum": ["TASK", "CASE", "SCHEDULE"],
+    }
+    evidenceSchema = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000,
+        "description": "An exact quote from the current user message requesting this change.",
+    }
     return [
         {
             "type": "function",
@@ -234,6 +244,209 @@ def getToolDefinitions() -> list[dict[str, object]]:
                         },
                     },
                     ["title", "objective", "evidenceText"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "propose_task",
+                "description": (
+                    "Propose a task when the user explicitly asks Sage to create, add, remember, "
+                    "or track an actionable item. This creates only an approval card."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "description": {"type": ["string", "null"], "maxLength": 10000},
+                        "priority": {
+                            "type": "string",
+                            "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                        },
+                        "dueAt": {"type": ["string", "null"], "maxLength": 100},
+                        "recurrence": {"type": ["string", "null"], "maxLength": 1000},
+                        "evidenceText": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "An exact quote from the current user message requesting the task.",
+                        },
+                    },
+                    ["title", "evidenceText"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "propose_schedule",
+                "description": (
+                    "Propose a future or recurring report or notification only when the user "
+                    "supplies an exact timezone-aware first run. This creates only an approval card."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "prompt": {"type": "string", "minLength": 1, "maxLength": 10000},
+                        "kind": {"type": "string", "enum": ["REPORT", "NOTIFICATION"]},
+                        "dueAt": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "recurrence": {
+                            "anyOf": [
+                                {"type": "string", "enum": ["DAILY", "WEEKLY"]},
+                                {"type": "null"},
+                            ]
+                        },
+                        "evidenceText": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "An exact quote from the current user message requesting the schedule.",
+                        },
+                    },
+                    ["title", "prompt", "kind", "dueAt", "evidenceText"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_work_items",
+                "description": (
+                    "Search non-archived tasks, cases, or schedules and retrieve their exact IDs "
+                    "before editing, adding details, or requesting archival."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "workItemKind": workItemKindSchema,
+                        "query": {"type": "string", "maxLength": 2000},
+                    },
+                    ["workItemKind", "query"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_case_details",
+                "description": (
+                    "Retrieve one exact case with its notes and milestone IDs after resolving "
+                    "the case ID with search_work_items."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "caseId": {"type": "string", "minLength": 1, "maxLength": 100},
+                    },
+                    ["caseId"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_work_item",
+                "description": (
+                    "Apply an explicitly requested reversible edit to one exact task, case, or "
+                    "schedule. Never use this to archive an item."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "workItemKind": workItemKindSchema,
+                        "workItemId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "description": {"type": ["string", "null"], "maxLength": 10000},
+                        "objective": {"type": "string", "minLength": 1, "maxLength": 10000},
+                        "priority": {
+                            "type": "string",
+                            "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                        },
+                        "dueAt": {"type": ["string", "null"], "maxLength": 100},
+                        "recurrence": {
+                            "anyOf": [
+                                {"type": "string", "maxLength": 1000},
+                                {"type": "null"},
+                            ]
+                        },
+                        "prompt": {"type": "string", "minLength": 1, "maxLength": 10000},
+                        "scheduleKind": {
+                            "type": "string",
+                            "enum": ["REPORT", "NOTIFICATION"],
+                        },
+                        "nextRunAt": {"type": "string", "maxLength": 100},
+                        "status": {
+                            "type": "string",
+                            "enum": ["OPEN", "COMPLETED", "ACTIVE", "CLOSED", "PAUSED"],
+                        },
+                        "evidenceText": evidenceSchema,
+                    },
+                    ["workItemKind", "workItemId", "evidenceText"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_case_note",
+                "description": "Append an explicitly requested note to one exact existing case.",
+                "parameters": _objectSchema(
+                    {
+                        "caseId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "text": {"type": "string", "minLength": 1, "maxLength": 10000},
+                        "evidenceText": evidenceSchema,
+                    },
+                    ["caseId", "text", "evidenceText"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_case_milestone",
+                "description": "Add an explicitly requested reversible milestone to one exact case.",
+                "parameters": _objectSchema(
+                    {
+                        "caseId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "dueAt": {"type": ["string", "null"], "maxLength": 100},
+                        "evidenceText": evidenceSchema,
+                    },
+                    ["caseId", "title", "evidenceText"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_case_milestone",
+                "description": "Edit or complete one exact milestone under one exact case.",
+                "parameters": _objectSchema(
+                    {
+                        "caseId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "milestoneId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "dueAt": {"type": ["string", "null"], "maxLength": 100},
+                        "status": {"type": "string", "enum": ["OPEN", "COMPLETED"]},
+                        "evidenceText": evidenceSchema,
+                    },
+                    ["caseId", "milestoneId", "evidenceText"],
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "archive_work_item",
+                "description": (
+                    "Request independent approval to archive one exact task, case, or schedule. "
+                    "Archival retains the row and audit history."
+                ),
+                "parameters": _objectSchema(
+                    {
+                        "workItemKind": workItemKindSchema,
+                        "workItemId": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "evidenceText": evidenceSchema,
+                    },
+                    ["workItemKind", "workItemId", "title", "evidenceText"],
                 ),
             },
         },
@@ -483,6 +696,20 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
             raise ValueError("Research query must be between 1 and 2000 characters")
         return {"query": researchQuery.strip()}
 
+    if toolName == "search_work_items":
+        _rejectUnknownKeys(arguments, {"workItemKind", "query"})
+        workItemKind = _validateWorkItemKind(arguments.get("workItemKind"))
+        query = arguments.get("query")
+        if not isinstance(query, str) or len(query) > 2_000:
+            raise ValueError("Work-item query must be a string of at most 2000 characters")
+        return {"workItemKind": workItemKind, "query": query}
+
+    if toolName == "get_case_details":
+        _rejectUnknownKeys(arguments, {"caseId"})
+        return {
+            "caseId": _validateWorkItemIdentifier(arguments.get("caseId"), "Case")
+        }
+
     if toolName.startswith("search_"):
         _rejectUnknownKeys(arguments, {"query"})
         query = arguments.get("query")
@@ -582,6 +809,168 @@ def validateToolArguments(toolName: str, rawArguments: str) -> dict[str, object]
             "evidenceText": evidenceText.strip(),
         }
 
+    if toolName == "propose_task":
+        _rejectUnknownKeys(
+            arguments,
+            {"title", "description", "priority", "dueAt", "recurrence", "evidenceText"},
+        )
+        title = _validateBoundedOptionalString(arguments.get("title"), "Task title", 500, True)
+        description = _validateBoundedOptionalString(
+            arguments.get("description"), "Task description", 10_000
+        )
+        priority = arguments.get("priority", "MEDIUM")
+        if priority not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+            raise ValueError("Task priority is not supported")
+        dueAt = _validateBoundedOptionalString(arguments.get("dueAt"), "Task dueAt", 100)
+        if dueAt is not None:
+            _validateTimezoneAwareTimestamp(dueAt, "Task dueAt")
+        recurrence = _validateBoundedOptionalString(
+            arguments.get("recurrence"), "Task recurrence", 1_000
+        )
+        evidenceText = _validateEvidenceText(arguments.get("evidenceText"), "Task")
+        return {
+            "title": title,
+            "description": description,
+            "priority": str(priority),
+            "dueAt": dueAt,
+            "recurrence": recurrence,
+            "evidenceText": evidenceText,
+        }
+
+    if toolName == "propose_schedule":
+        _rejectUnknownKeys(
+            arguments,
+            {"title", "prompt", "kind", "dueAt", "recurrence", "evidenceText"},
+        )
+        title = _validateBoundedOptionalString(arguments.get("title"), "Schedule title", 500, True)
+        prompt = _validateBoundedOptionalString(
+            arguments.get("prompt"), "Schedule prompt", 10_000, True
+        )
+        kind = arguments.get("kind")
+        if kind not in {"REPORT", "NOTIFICATION"}:
+            raise ValueError("Schedule kind is not supported")
+        dueAt = _validateBoundedOptionalString(
+            arguments.get("dueAt"), "Schedule dueAt", 100, True
+        )
+        _validateTimezoneAwareTimestamp(str(dueAt), "Schedule dueAt")
+        recurrence = arguments.get("recurrence")
+        if recurrence not in {None, "DAILY", "WEEKLY"}:
+            raise ValueError("Schedule recurrence is not supported")
+        evidenceText = _validateEvidenceText(arguments.get("evidenceText"), "Schedule")
+        return {
+            "title": title,
+            "prompt": prompt,
+            "kind": str(kind),
+            "dueAt": dueAt,
+            "recurrence": recurrence,
+            "evidenceText": evidenceText,
+        }
+
+    if toolName == "update_work_item":
+        commonKeys = {"workItemKind", "workItemId", "evidenceText"}
+        allowedChangeKeys = {
+            "TASK": {"title", "description", "priority", "dueAt", "recurrence", "status"},
+            "CASE": {"title", "objective", "status"},
+            "SCHEDULE": {
+                "title",
+                "prompt",
+                "scheduleKind",
+                "recurrence",
+                "nextRunAt",
+                "status",
+            },
+        }
+        workItemKind = _validateWorkItemKind(arguments.get("workItemKind"))
+        unsupportedKeys = set(arguments) - commonKeys - allowedChangeKeys[workItemKind]
+        if unsupportedKeys:
+            raise ValueError(f"{workItemKind.title()} update contains unsupported fields")
+        workItemId = _validateWorkItemIdentifier(arguments.get("workItemId"), "Work-item")
+        rawChanges = {
+            fieldName: fieldValue
+            for fieldName, fieldValue in arguments.items()
+            if fieldName not in commonKeys
+        }
+        if not rawChanges:
+            raise ValueError(f"{workItemKind.title()} update requires at least one changed field")
+        changes = _validateWorkItemChanges(workItemKind, rawChanges)
+        return {
+            "workItemKind": workItemKind,
+            "workItemId": workItemId,
+            "changes": changes,
+            "evidenceText": _validateEvidenceText(arguments.get("evidenceText"), "Work-item"),
+        }
+
+    if toolName == "add_case_note":
+        _rejectUnknownKeys(arguments, {"caseId", "text", "evidenceText"})
+        noteText = _validateBoundedOptionalString(
+            arguments.get("text"), "Case note", 10_000, True
+        )
+        return {
+            "caseId": _validateWorkItemIdentifier(arguments.get("caseId"), "Case"),
+            "text": noteText,
+            "evidenceText": _validateEvidenceText(arguments.get("evidenceText"), "Case note"),
+        }
+
+    if toolName == "add_case_milestone":
+        _rejectUnknownKeys(arguments, {"caseId", "title", "dueAt", "evidenceText"})
+        dueAt = _validateBoundedOptionalString(arguments.get("dueAt"), "Milestone dueAt", 100)
+        if dueAt is not None:
+            _validateTimezoneAwareTimestamp(dueAt, "Milestone dueAt")
+        return {
+            "caseId": _validateWorkItemIdentifier(arguments.get("caseId"), "Case"),
+            "title": _validateBoundedOptionalString(
+                arguments.get("title"), "Milestone title", 500, True
+            ),
+            "dueAt": dueAt,
+            "evidenceText": _validateEvidenceText(arguments.get("evidenceText"), "Milestone"),
+        }
+
+    if toolName == "update_case_milestone":
+        identityKeys = {"caseId", "milestoneId", "evidenceText"}
+        _rejectUnknownKeys(arguments, identityKeys | {"title", "dueAt", "status"})
+        rawChanges = {
+            fieldName: fieldValue
+            for fieldName, fieldValue in arguments.items()
+            if fieldName not in identityKeys
+        }
+        if not rawChanges:
+            raise ValueError("Milestone update requires at least one changed field")
+        changes: dict[str, object] = {}
+        if "title" in rawChanges:
+            changes["title"] = _validateBoundedOptionalString(
+                rawChanges["title"], "Milestone title", 500, True
+            )
+        if "dueAt" in rawChanges:
+            dueAt = _validateBoundedOptionalString(rawChanges["dueAt"], "Milestone dueAt", 100)
+            if dueAt is not None:
+                _validateTimezoneAwareTimestamp(dueAt, "Milestone dueAt")
+            changes["dueAt"] = dueAt
+        if "status" in rawChanges:
+            if rawChanges["status"] not in {"OPEN", "COMPLETED"}:
+                raise ValueError("Milestone status is not supported")
+            changes["status"] = rawChanges["status"]
+        return {
+            "caseId": _validateWorkItemIdentifier(arguments.get("caseId"), "Case"),
+            "milestoneId": _validateWorkItemIdentifier(
+                arguments.get("milestoneId"), "Milestone"
+            ),
+            "changes": changes,
+            "evidenceText": _validateEvidenceText(arguments.get("evidenceText"), "Milestone"),
+        }
+
+    if toolName == "archive_work_item":
+        _rejectUnknownKeys(
+            arguments, {"workItemKind", "workItemId", "title", "evidenceText"}
+        )
+        return {
+            "workItemKind": _validateWorkItemKind(arguments.get("workItemKind")),
+            "workItemId": _validateWorkItemIdentifier(arguments.get("workItemId"), "Work-item"),
+            "title": _validateBoundedOptionalString(
+                arguments.get("title"), "Work-item title", 500, True
+            ),
+            "evidenceText": _validateEvidenceText(arguments.get("evidenceText"), "Archive"),
+        }
+
     if toolName in {
         "draft_gmail_message",
         "request_gmail_approval",
@@ -671,6 +1060,116 @@ def _rejectUnknownKeys(arguments: dict[str, object], allowedKeys: set[str]) -> N
     """Reject extra model fields rather than silently broadening a request."""
     if set(arguments) - allowedKeys:
         raise ValueError("Tool arguments contain unsupported fields")
+
+
+def _validateBoundedOptionalString(
+    value: object, fieldLabel: str, maximumLength: int, isRequired: bool = False
+) -> str | None:
+    """Validate a nullable model field without silently stringifying other types."""
+    if value is None and not isRequired:
+        return None
+    if not isinstance(value, str) or not value.strip() or len(value) > maximumLength:
+        raise ValueError(f"{fieldLabel} is invalid")
+    return value.strip()
+
+
+def _validateEvidenceText(value: object, toolLabel: str) -> str:
+    """Validate bounded exact-message evidence supplied by a semantic tool choice."""
+    if not isinstance(value, str) or not value.strip() or len(value) > 2_000:
+        raise ValueError(f"{toolLabel} evidence must be between 1 and 2000 characters")
+    return value.strip()
+
+
+def _validateWorkItemKind(value: object) -> str:
+    """Restrict lifecycle operations to the three persisted work-item families."""
+    if value not in {"TASK", "CASE", "SCHEDULE"}:
+        raise ValueError("Work-item kind is not supported")
+    return str(value)
+
+
+def _validateWorkItemIdentifier(value: object, fieldLabel: str) -> str:
+    """Accept only bounded identifiers that are safe to embed in a Core URL path."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 100
+        or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None
+    ):
+        raise ValueError(f"{fieldLabel} ID is invalid")
+    return value
+
+
+def _validateWorkItemChanges(
+    workItemKind: str, rawChanges: dict[str, object]
+) -> dict[str, object]:
+    """Validate lifecycle edits against the selected persisted entity type."""
+    changes: dict[str, object] = {}
+    stringFields = {
+        "TASK": {"title": (500, True), "description": (10_000, False)},
+        "CASE": {"title": (500, True), "objective": (10_000, True)},
+        "SCHEDULE": {"title": (500, True), "prompt": (10_000, True)},
+    }[workItemKind]
+    for fieldName, (maximumLength, isRequired) in stringFields.items():
+        if fieldName in rawChanges:
+            changes[fieldName] = _validateBoundedOptionalString(
+                rawChanges[fieldName],
+                f"{workItemKind.title()} {fieldName}",
+                maximumLength,
+                isRequired,
+            )
+    if workItemKind == "TASK":
+        if "priority" in rawChanges:
+            if rawChanges["priority"] not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+                raise ValueError("Task priority is not supported")
+            changes["priority"] = rawChanges["priority"]
+        if "dueAt" in rawChanges:
+            dueAt = _validateBoundedOptionalString(rawChanges["dueAt"], "Task dueAt", 100)
+            if dueAt is not None:
+                _validateTimezoneAwareTimestamp(dueAt, "Task dueAt")
+            changes["dueAt"] = dueAt
+        if "recurrence" in rawChanges:
+            changes["recurrence"] = _validateBoundedOptionalString(
+                rawChanges["recurrence"], "Task recurrence", 1_000
+            )
+        if "status" in rawChanges:
+            if rawChanges["status"] not in {"OPEN", "COMPLETED"}:
+                raise ValueError("Task status is not supported")
+            changes["status"] = rawChanges["status"]
+    elif workItemKind == "CASE":
+        if "status" in rawChanges:
+            if rawChanges["status"] not in {"ACTIVE", "CLOSED"}:
+                raise ValueError("Case status is not supported")
+            changes["status"] = rawChanges["status"]
+    else:
+        if "scheduleKind" in rawChanges:
+            if rawChanges["scheduleKind"] not in {"REPORT", "NOTIFICATION"}:
+                raise ValueError("Schedule kind is not supported")
+            changes["kind"] = rawChanges["scheduleKind"]
+        if "recurrence" in rawChanges:
+            if rawChanges["recurrence"] not in {None, "DAILY", "WEEKLY"}:
+                raise ValueError("Schedule recurrence is not supported")
+            changes["recurrence"] = rawChanges["recurrence"]
+        if "nextRunAt" in rawChanges:
+            nextRunAt = _validateBoundedOptionalString(
+                rawChanges["nextRunAt"], "Schedule nextRunAt", 100, True
+            )
+            _validateTimezoneAwareTimestamp(str(nextRunAt), "Schedule nextRunAt")
+            changes["nextRunAt"] = nextRunAt
+        if "status" in rawChanges:
+            if rawChanges["status"] not in {"ACTIVE", "PAUSED"}:
+                raise ValueError("Schedule status is not supported")
+            changes["status"] = rawChanges["status"]
+    return changes
+
+
+def _validateTimezoneAwareTimestamp(value: str, fieldLabel: str) -> None:
+    """Require an ISO timestamp with an explicit timezone offset."""
+    try:
+        parsedTimestamp = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"{fieldLabel} must be a valid ISO timestamp") from error
+    if parsedTimestamp.tzinfo is None:
+        raise ValueError(f"{fieldLabel} must include a timezone")
 
 
 def _validateCalendarArguments(

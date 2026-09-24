@@ -21,6 +21,10 @@ def testSagePromptEncodesAuthorityAndResearchBoundaries():
     assert "`/remember" in prompt
     assert "Forgetting any context" in prompt
     assert "standing instruction" in prompt
+    assert "Search for the exact task, case, or schedule before editing" in prompt
+    assert "Archive always requires the user's approval button" in prompt
+    assert "case notes and milestones" in prompt
+    assert "Linking two entities requires asking the user first" in prompt
 
 
 def testIrisPromptLimitsVisionWorkerAuthority():

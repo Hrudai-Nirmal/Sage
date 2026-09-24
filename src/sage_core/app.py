@@ -22,6 +22,7 @@ from sage_core.operator_ui import getOperatorHtml
 from sage_core.schedule_state import ScheduleStateRepository
 from sage_core.system_state import SystemStateRepository
 from sage_core.telegram_state import TelegramCallback, TelegramMessage, TelegramStateRepository
+from sage_core.work_state import WorkStateRepository
 
 
 class TaskProposalPayload(BaseModel):
@@ -38,6 +39,7 @@ class TaskApprovalRequestPayload(BaseModel):
     """Validate a task proposal that requires an explicit confirmation."""
 
     actionType: Literal["CREATE_TASK"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
     payload: TaskProposalPayload
 
 
@@ -52,6 +54,7 @@ class CaseApprovalRequestPayload(BaseModel):
     """Validate a case proposal that requires an explicit confirmation."""
 
     actionType: Literal["CREATE_CASE"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
     payload: CaseProposalPayload
 
 
@@ -79,7 +82,86 @@ class ScheduleApprovalRequestPayload(BaseModel):
     """Require explicit confirmation before creating recurring or future work."""
 
     actionType: Literal["CREATE_SCHEDULE"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
     payload: ScheduleProposalPayload
+
+
+class ArchiveWorkItemProposalPayload(BaseModel):
+    """Bind archival approval to one exact retained work-item row."""
+
+    title: str = Field(min_length=1, max_length=500)
+    workItemId: str = Field(min_length=1, max_length=100)
+    workItemKind: Literal["TASK", "CASE", "SCHEDULE"]
+
+
+class ArchiveWorkItemApprovalRequestPayload(BaseModel):
+    """Require independent confirmation before hiding durable work from active views."""
+
+    actionType: Literal["ARCHIVE_WORK_ITEM"]
+    idempotencyKey: str | None = Field(default=None, min_length=1, max_length=500)
+    payload: ArchiveWorkItemProposalPayload
+
+
+class LifecycleUpdatePayload(BaseModel):
+    """Reject empty PATCH bodies before they reach lifecycle repositories."""
+
+    @model_validator(mode="after")
+    def validateAtLeastOneChange(self) -> "LifecycleUpdatePayload":
+        """Require the caller to explicitly select at least one field."""
+        if not self.model_fields_set:
+            raise ValueError("At least one lifecycle change is required")
+        return self
+
+
+class TaskUpdatePayload(LifecycleUpdatePayload):
+    """Validate reversible task edits; archival uses a separate approval action."""
+
+    description: str | None = Field(default=None, max_length=10_000)
+    dueAt: str | None = Field(default=None, max_length=100)
+    priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] | None = None
+    recurrence: str | None = Field(default=None, max_length=1_000)
+    status: Literal["OPEN", "COMPLETED"] | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class CaseUpdatePayload(LifecycleUpdatePayload):
+    """Validate reversible case edits and ACTIVE/CLOSED transitions."""
+
+    objective: str | None = Field(default=None, min_length=1, max_length=10_000)
+    status: Literal["ACTIVE", "CLOSED"] | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class CaseNotePayload(BaseModel):
+    """Validate one explicit append-only case note."""
+
+    text: str = Field(min_length=1, max_length=10_000)
+
+
+class CaseMilestoneCreatePayload(BaseModel):
+    """Validate one reversible case milestone."""
+
+    dueAt: str | None = Field(default=None, max_length=100)
+    title: str = Field(min_length=1, max_length=500)
+
+
+class CaseMilestoneUpdatePayload(LifecycleUpdatePayload):
+    """Validate milestone edits and OPEN/COMPLETED transitions."""
+
+    dueAt: str | None = Field(default=None, max_length=100)
+    status: Literal["OPEN", "COMPLETED"] | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class ScheduleUpdatePayload(LifecycleUpdatePayload):
+    """Validate reversible schedule edits and pause/resume transitions."""
+
+    kind: Literal["REPORT", "NOTIFICATION"] | None = None
+    nextRunAt: str | None = Field(default=None, max_length=100)
+    prompt: str | None = Field(default=None, min_length=1, max_length=10_000)
+    recurrence: Literal["DAILY", "WEEKLY"] | None = None
+    status: Literal["ACTIVE", "PAUSED"] | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class DriveDeleteProposalPayload(BaseModel):
@@ -394,6 +476,7 @@ def createApp(
         calendarAccountKey=googleCalendarAccountKey,
     )
     systemStateRepository = SystemStateRepository(database)
+    workStateRepository = WorkStateRepository(database)
     operatorStateRepository = OperatorStateRepository(database)
     telegramStateRepository = TelegramStateRepository(
         database=database,
@@ -449,6 +532,7 @@ def createApp(
             TaskApprovalRequestPayload
             | CaseApprovalRequestPayload
             | ScheduleApprovalRequestPayload
+            | ArchiveWorkItemApprovalRequestPayload
             | DriveDeleteApprovalRequestPayload
             | GmailSendApprovalRequestPayload
             | CalendarDeleteApprovalRequestPayload
@@ -562,6 +646,39 @@ def createApp(
         """List only tasks already materialized through the approval path."""
         return approvalStateRepository.listTasks()
 
+    @app.get("/v1/work-items")
+    def searchWorkItems(
+        kind: Literal["TASK", "CASE", "SCHEDULE"],
+        query: str = "",
+        resultLimit: int = 20,
+    ) -> list[dict[str, object]]:
+        """Resolve exact work-item IDs before any lifecycle mutation."""
+        try:
+            return workStateRepository.searchWorkItems(kind, query, resultLimit)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
+
+    @app.patch("/v1/tasks/{taskId}")
+    def updateTask(
+        taskId: str,
+        update: TaskUpdatePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Apply an explicit reversible task edit through the constrained channel."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return workStateRepository.updateTask(
+                taskId, update.model_dump(exclude_unset=True), "sage-proposal-channel"
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
+
     @app.post("/v1/context/records", status_code=status.HTTP_201_CREATED)
     def createContextRecord(
         contextRecord: ContextRecordCreatePayload,
@@ -610,10 +727,113 @@ def createApp(
         """List only cases materialized through the approval path."""
         return approvalStateRepository.listCases()
 
+    @app.get("/v1/cases/{caseId}")
+    def getCaseDetails(caseId: str) -> dict[str, object]:
+        """Return one case with its notes and milestones for exact follow-up actions."""
+        try:
+            return workStateRepository.getCaseDetails(caseId)
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+    @app.patch("/v1/cases/{caseId}")
+    def updateCase(
+        caseId: str,
+        update: CaseUpdatePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Apply an explicit reversible case edit through the constrained channel."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return workStateRepository.updateCase(
+                caseId, update.model_dump(exclude_unset=True), "sage-proposal-channel"
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
+
+    @app.post("/v1/cases/{caseId}/notes", status_code=status.HTTP_201_CREATED)
+    def addCaseNote(
+        caseId: str,
+        note: CaseNotePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Append an explicit reversible note to one exact case."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return workStateRepository.addCaseNote(
+                caseId, note.text, "sage-proposal-channel"
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+    @app.post("/v1/cases/{caseId}/milestones", status_code=status.HTTP_201_CREATED)
+    def addCaseMilestone(
+        caseId: str,
+        milestone: CaseMilestoneCreatePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Create one explicit reversible milestone under an exact case."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return workStateRepository.addCaseMilestone(
+                caseId, milestone.title, milestone.dueAt, "sage-proposal-channel"
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
+
+    @app.patch("/v1/cases/{caseId}/milestones/{milestoneId}")
+    def updateCaseMilestone(
+        caseId: str,
+        milestoneId: str,
+        update: CaseMilestoneUpdatePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Apply one explicit reversible milestone edit."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return workStateRepository.updateCaseMilestone(
+                caseId,
+                milestoneId,
+                update.model_dump(exclude_unset=True),
+                "sage-proposal-channel",
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
+
     @app.get("/v1/schedules")
     def listSchedules() -> list[dict[str, str | None]]:
         """List approved schedules and their next durable run time."""
         return ScheduleStateRepository(database).listSchedules()
+
+    @app.patch("/v1/schedules/{scheduleId}")
+    def updateSchedule(
+        scheduleId: str,
+        update: ScheduleUpdatePayload,
+        sageProposalToken: str = Header(alias="X-Sage-Proposal-Token"),
+    ) -> dict[str, object]:
+        """Edit, pause, or resume one exact schedule through the constrained channel."""
+        _validateToken(sageProposalToken, proposalToken)
+        try:
+            return workStateRepository.updateSchedule(
+                scheduleId, update.model_dump(exclude_unset=True), "sage-proposal-channel"
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
 
     @app.get("/v1/audit-events")
     def listAuditEvents() -> list[dict[str, str]]:

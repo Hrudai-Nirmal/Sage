@@ -14,6 +14,9 @@ def testRegistryExposesOnlyImplementedGoogleTools():
     assert toolNames == {
         "create_calendar_event",
         "create_drive_folder",
+        "add_case_milestone",
+        "add_case_note",
+        "archive_work_item",
         "delete_calendar_event",
         "delete_drive_file",
         "draft_gmail_message",
@@ -22,19 +25,25 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "revise_gmail_draft",
         "import_download_file",
         "forget_context",
+        "get_case_details",
         "remember_context",
         "remember_email_watch",
         "research_web",
         "respond",
         "propose_case",
+        "propose_schedule",
+        "propose_task",
         "search_calendar",
         "search_context",
         "search_documents",
         "search_downloads",
         "search_drive",
         "search_gmail",
+        "search_work_items",
         "send_gmail_message",
+        "update_case_milestone",
         "update_calendar_event",
+        "update_work_item",
     }
 
 
@@ -118,6 +127,84 @@ def testValidatesNaturalCaseProposalArguments():
         validateToolArguments(
             "propose_case",
             '{"title":"","objective":"Secure a software development role"}',
+        )
+
+
+def testValidatesTaskAndScheduleProposalArguments():
+    """Natural work proposals carry complete bounded fields and exact intent evidence."""
+    assert validateToolArguments(
+        "propose_task",
+        '{"title":"Submit application","description":"Apply to Acme",'
+        '"priority":"HIGH","dueAt":"2026-09-30T18:00:00+05:30",'
+        '"recurrence":null,"evidenceText":"Create a task to submit my Acme application"}',
+    ) == {
+        "title": "Submit application",
+        "description": "Apply to Acme",
+        "priority": "HIGH",
+        "dueAt": "2026-09-30T18:00:00+05:30",
+        "recurrence": None,
+        "evidenceText": "Create a task to submit my Acme application",
+    }
+    assert validateToolArguments(
+        "propose_schedule",
+        '{"title":"Morning plan","prompt":"Summarize my open tasks",'
+        '"kind":"REPORT","dueAt":"2026-09-30T09:00:00+05:30",'
+        '"recurrence":"DAILY","evidenceText":"Schedule a daily morning plan"}',
+    )["kind"] == "REPORT"
+
+    with pytest.raises(ValueError, match="timezone"):
+        validateToolArguments(
+            "propose_schedule",
+            '{"title":"Morning plan","prompt":"Summarize tasks","kind":"REPORT",'
+            '"dueAt":"2026-09-30T09:00:00","recurrence":"DAILY",'
+            '"evidenceText":"Schedule a daily morning plan"}',
+        )
+
+
+def testValidatesWorkLifecycleArguments():
+    """One deep lifecycle interface validates fields against the selected work-item kind."""
+    assert validateToolArguments(
+        "search_work_items", '{"workItemKind":"TASK","query":"application"}'
+    ) == {"workItemKind": "TASK", "query": "application"}
+    assert validateToolArguments(
+        "get_case_details", '{"caseId":"case-1"}'
+    ) == {"caseId": "case-1"}
+    assert validateToolArguments(
+        "update_work_item",
+        '{"workItemKind":"TASK","workItemId":"task-1","status":"COMPLETED",'
+        '"priority":"HIGH","evidenceText":"Mark my application task complete"}',
+    ) == {
+        "workItemKind": "TASK",
+        "workItemId": "task-1",
+        "changes": {"status": "COMPLETED", "priority": "HIGH"},
+        "evidenceText": "Mark my application task complete",
+    }
+    assert validateToolArguments(
+        "add_case_note",
+        '{"caseId":"case-1","text":"Applied to Acme",'
+        '"evidenceText":"Add a note that I applied to Acme"}',
+    )["caseId"] == "case-1"
+    assert validateToolArguments(
+        "add_case_milestone",
+        '{"caseId":"case-1","title":"Complete interview","dueAt":null,'
+        '"evidenceText":"Add complete interview as a milestone"}',
+    )["title"] == "Complete interview"
+    assert validateToolArguments(
+        "update_case_milestone",
+        '{"caseId":"case-1","milestoneId":"milestone-1","status":"COMPLETED",'
+        '"evidenceText":"Mark the interview milestone complete"}',
+    )["changes"] == {"status": "COMPLETED"}
+    assert validateToolArguments(
+        "archive_work_item",
+        '{"workItemKind":"CASE","workItemId":"case-1","title":"Job search",'
+        '"evidenceText":"Archive my job search case"}',
+    )["workItemKind"] == "CASE"
+
+    with pytest.raises(ValueError, match="Task"):
+        validateToolArguments(
+            "update_work_item",
+            '{"workItemKind":"TASK","workItemId":"task-1","objective":"Invalid",'
+            '"evidenceText":"Update the task"}',
         )
     with pytest.raises(ValueError, match="objective"):
         validateToolArguments(

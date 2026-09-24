@@ -652,6 +652,199 @@ def testCreatesScheduledDeliveryOnlyAfterApproval(tmp_path):
         }
 
 
+def testArchivesWorkOnlyAfterIndependentApprovalAndRetainsRows(tmp_path):
+    """Task, case, and schedule archival is approval-gated and never hard-deletes history."""
+    databasePath = tmp_path / "sage.db"
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=databasePath,
+        proposalToken="proposal-token",
+    )
+    proposalHeaders = {"X-Sage-Proposal-Token": "proposal-token"}
+    approvalHeaders = {"X-Sage-Approval-Token": "approval-token"}
+
+    with TestClient(app) as client:
+        taskProposal = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={
+                "actionType": "CREATE_TASK",
+                "payload": {"title": "Temporary task"},
+            },
+        ).json()
+        client.post(
+            f"/v1/approval-requests/{taskProposal['id']}/confirm",
+            headers=approvalHeaders,
+            json={"approvedBy": "telegram:8961856168"},
+        )
+        with sqlite3.connect(databasePath) as connection:
+            taskId = connection.execute(
+                "SELECT id FROM tasks WHERE title = 'Temporary task'"
+            ).fetchone()[0]
+
+        archiveProposal = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={
+                "actionType": "ARCHIVE_WORK_ITEM",
+                "payload": {
+                    "workItemId": taskId,
+                    "workItemKind": "TASK",
+                    "title": "Temporary task",
+                },
+            },
+        )
+        assert archiveProposal.status_code == 201
+        with sqlite3.connect(databasePath) as connection:
+            assert connection.execute(
+                "SELECT status FROM tasks WHERE id = ?", (taskId,)
+            ).fetchone()[0] == "OPEN"
+
+        archiveApproval = client.post(
+            f"/v1/approval-requests/{archiveProposal.json()['id']}/confirm",
+            headers=approvalHeaders,
+            json={"approvedBy": "telegram:8961856168"},
+        )
+
+    assert archiveApproval.status_code == 200
+    with sqlite3.connect(databasePath) as connection:
+        assert connection.execute(
+            "SELECT status FROM tasks WHERE id = ?", (taskId,)
+        ).fetchone()[0] == "ARCHIVED"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM tasks WHERE id = ?", (taskId,)
+        ).fetchone()[0] == 1
+
+
+def testWorkApprovalProposalsDeduplicateByRequestKey(tmp_path):
+    """Telegram delivery retries must not create duplicate work approval cards."""
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=tmp_path / "sage.db",
+        proposalToken="proposal-token",
+    )
+    proposal = {
+        "actionType": "ARCHIVE_WORK_ITEM",
+        "idempotencyKey": "telegram:archive-task:ARCHIVE_WORK_ITEM",
+        "payload": {
+            "workItemId": "task-1",
+            "workItemKind": "TASK",
+            "title": "Temporary task",
+        },
+    }
+
+    with TestClient(app) as client:
+        firstResponse = client.post(
+            "/v1/approval-requests",
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+            json=proposal,
+        )
+        replayResponse = client.post(
+            "/v1/approval-requests",
+            headers={"X-Sage-Proposal-Token": "proposal-token"},
+            json=proposal,
+        )
+
+    assert firstResponse.status_code == replayResponse.status_code == 201
+    assert firstResponse.json()["id"] == replayResponse.json()["id"]
+
+
+def testAuthenticatedWorkLifecycleApiUpdatesTasksCasesAndSchedules(tmp_path):
+    """The constrained proposal channel may apply explicit reversible lifecycle changes."""
+    app = createApp(
+        approvalToken="approval-token",
+        databasePath=tmp_path / "sage.db",
+        proposalToken="proposal-token",
+    )
+    proposalHeaders = {"X-Sage-Proposal-Token": "proposal-token"}
+    approvalHeaders = {"X-Sage-Approval-Token": "approval-token"}
+
+    def createApprovedWork(client, actionType, payload):
+        proposal = client.post(
+            "/v1/approval-requests",
+            headers=proposalHeaders,
+            json={"actionType": actionType, "payload": payload},
+        ).json()
+        client.post(
+            f"/v1/approval-requests/{proposal['id']}/confirm",
+            headers=approvalHeaders,
+            json={"approvedBy": "telegram:8961856168"},
+        )
+
+    with TestClient(app) as client:
+        createApprovedWork(client, "CREATE_TASK", {"title": "Submit application"})
+        createApprovedWork(
+            client,
+            "CREATE_CASE",
+            {"title": "Job search", "objective": "Secure a developer role"},
+        )
+        createApprovedWork(
+            client,
+            "CREATE_SCHEDULE",
+            {
+                "title": "Morning plan",
+                "prompt": "Summarize open tasks",
+                "kind": "REPORT",
+                "dueAt": "2026-10-01T09:00:00+05:30",
+                "recurrence": "DAILY",
+            },
+        )
+
+        task = client.get(
+            "/v1/work-items", params={"kind": "TASK", "query": "application"}
+        ).json()[0]
+        case = client.get(
+            "/v1/work-items", params={"kind": "CASE", "query": "job"}
+        ).json()[0]
+        schedule = client.get(
+            "/v1/work-items", params={"kind": "SCHEDULE", "query": "morning"}
+        ).json()[0]
+
+        deniedUpdate = client.patch(
+            f"/v1/tasks/{task['id']}", json={"status": "COMPLETED"}
+        )
+        taskUpdate = client.patch(
+            f"/v1/tasks/{task['id']}",
+            headers=proposalHeaders,
+            json={"priority": "HIGH", "status": "COMPLETED"},
+        )
+        caseUpdate = client.patch(
+            f"/v1/cases/{case['id']}",
+            headers=proposalHeaders,
+            json={"status": "CLOSED"},
+        )
+        note = client.post(
+            f"/v1/cases/{case['id']}/notes",
+            headers=proposalHeaders,
+            json={"text": "Applied to Acme"},
+        )
+        milestone = client.post(
+            f"/v1/cases/{case['id']}/milestones",
+            headers=proposalHeaders,
+            json={"title": "Complete interview", "dueAt": None},
+        ).json()
+        milestoneUpdate = client.patch(
+            f"/v1/cases/{case['id']}/milestones/{milestone['id']}",
+            headers=proposalHeaders,
+            json={"status": "COMPLETED"},
+        )
+        scheduleUpdate = client.patch(
+            f"/v1/schedules/{schedule['id']}",
+            headers=proposalHeaders,
+            json={"status": "PAUSED"},
+        )
+        caseDetails = client.get(f"/v1/cases/{case['id']}")
+
+    assert deniedUpdate.status_code == 422
+    assert taskUpdate.json()["status"] == "COMPLETED"
+    assert taskUpdate.json()["priority"] == "HIGH"
+    assert caseUpdate.json()["status"] == "CLOSED"
+    assert note.json()["text"] == "Applied to Acme"
+    assert milestoneUpdate.json()["status"] == "COMPLETED"
+    assert scheduleUpdate.json()["status"] == "PAUSED"
+    assert caseDetails.json()["notes"][0]["text"] == "Applied to Acme"
+
+
 def testPersistsOperatorSelectedModeAcrossAppRestarts(tmp_path):
     """Mode changes must survive a service restart so backlog handling is predictable."""
     databasePath = tmp_path / "sage.db"

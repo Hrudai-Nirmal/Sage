@@ -15,7 +15,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 
 ## Gotchas
 
-- No user task, case, skill, or workflow mutation occurs without an explicit approval record.
+- Creating or archiving a task, case, or schedule requires an explicit approval record. Explicit reversible edits, status transitions, case notes, and case milestones do not; skill and workflow creation remain approval-gated.
 - Docker containers must not receive broad host filesystem mounts. Sage Core owns controlled import access.
 - Core uses independent proposal, approval, and operator credentials so a model-visible proposal channel cannot confirm its own actions.
 - Runtime modes are `NORMAL`, `ECO`, `SLEEP`, and `SHUTDOWN`; shutdown stops Sage only and never powers off macOS.
@@ -23,6 +23,10 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Model ports are single-instance reservations: `18080` for Sage and `18081` for Iris. A process guard rejects an occupied port unless it belongs to the matching model.
 - Daily maintenance clears only Sage temporary artifacts older than seven days and model-server memory caches; it does not delete documents, databases, model weights, or backup data.
 - Tasks are approval-created and initially support title, notes, priority, due timestamp, and recurrence. New schema columns are added without dropping existing SQLite task data.
+- Active tasks, cases, and schedules share a bounded lifecycle interface. Sage first searches for an exact retained ID, then may apply only type-specific reversible fields; archived rows are excluded from active search but retained with their audit history.
+- Case notes and milestones are explicit automatic writes. Milestones support OPEN/COMPLETED state and an optional timezone-aware due timestamp. Entity relationships are not inferred or persisted; Sage must ask before any future linking operation.
+- Schedule edits and delivery-queue reconciliation use one SQLite transaction, preventing a pause, resume, or reschedule from leaving the schedule and its pending deliveries out of sync.
+- Work approval proposals preserve Telegram-derived idempotency keys, so a replay returns the original task, case, schedule, or archive approval instead of creating another card.
 - Telegram delivery is at-least-once: Core records each Telegram message ID once and returns a successful duplicate acknowledgement for safe n8n retries.
 - The versioned n8n Telegram poller runs every five seconds, filters incoming updates against runtime allowlists, and commits its Bot API offset only after Core accepts the batch. The previous 30-second cadence caused roughly 15 seconds of average ingress latency before model work began.
 - n8n permits workflow environment access only because the local poller must read its private bot and Core-ingress credentials; `configure-telegram.sh` copies only the ingress credential, never the independent approval credentials, into n8n's Telegram environment.

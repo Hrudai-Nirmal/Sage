@@ -75,6 +75,25 @@ class SageDatabase:
                     FOREIGN KEY (approval_request_id) REFERENCES approval_requests(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS case_notes (
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    note_text TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (case_id) REFERENCES cases(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS case_milestones (
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    due_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (case_id) REFERENCES cases(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS audit_events (
                     id TEXT PRIMARY KEY,
                     timestamp TEXT NOT NULL,
@@ -312,6 +331,9 @@ class SageDatabase:
             self._addTaskColumnIfMissing(connection, "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")
             self._addTaskColumnIfMissing(connection, "due_at", "TEXT")
             self._addTaskColumnIfMissing(connection, "recurrence", "TEXT")
+            self._addColumnIfMissing(connection, "tasks", "updated_at", "TEXT")
+            self._addColumnIfMissing(connection, "cases", "updated_at", "TEXT")
+            self._addColumnIfMissing(connection, "schedules", "updated_at", "TEXT")
             self._addTelegramColumnIfMissing(connection, "dispatch_status", "TEXT NOT NULL DEFAULT 'PENDING'")
             self._addTelegramColumnIfMissing(connection, "reply_text", "TEXT")
             self._addTelegramColumnIfMissing(connection, "attachment_json", "TEXT")
@@ -329,6 +351,26 @@ class SageDatabase:
             connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS context_revisions_idempotency_key
                    ON context_revisions(idempotency_key) WHERE idempotency_key IS NOT NULL"""
+            )
+
+    def _addColumnIfMissing(
+        self,
+        connection: sqlite3.Connection,
+        tableName: str,
+        columnName: str,
+        columnDefinition: str,
+    ) -> None:
+        """Apply one additive migration to a fixed internal table identifier."""
+        supportedTables = {"cases", "schedules", "tasks"}
+        if tableName not in supportedTables:
+            raise ValueError("Unsupported migration table")
+        existingColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute(f"PRAGMA table_info({tableName})").fetchall()
+        }
+        if columnName not in existingColumns:
+            connection.execute(
+                f"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition}"
             )
 
     def _addTaskColumnIfMissing(

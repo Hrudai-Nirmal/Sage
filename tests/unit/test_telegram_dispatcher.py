@@ -1237,6 +1237,137 @@ def testCaseToolCreatesOnlyAnApprovalRequest(monkeypatch):
     )]
 
 
+def testTaskAndScheduleToolsCreateOnlyApprovalRequests(monkeypatch):
+    """Natural task and schedule selection cannot materialize durable work directly."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramWorkProposals", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    approvalRequests = []
+
+    def fakeSendApprovalRequest(secrets, actionType, payload, label, idempotencyKey=""):
+        approvalRequests.append((actionType, payload, label, idempotencyKey))
+        return "Approval card sent."
+
+    monkeypatch.setattr(dispatcher, "sendApprovalRequest", fakeSendApprovalRequest)
+
+    taskResult = dispatcher.executeSageTool(
+        {},
+        "propose_task",
+        '{"title":"Submit application","description":"Apply to Acme",'
+        '"priority":"HIGH","dueAt":null,"recurrence":null,'
+        '"evidenceText":"Create a task to submit my Acme application"}',
+        "Create a task to submit my Acme application",
+        "telegram:task-1",
+    )
+    scheduleResult = dispatcher.executeSageTool(
+        {},
+        "propose_schedule",
+        '{"title":"Morning plan","prompt":"Summarize my open tasks",'
+        '"kind":"REPORT","dueAt":"2026-09-30T09:00:00+05:30",'
+        '"recurrence":"DAILY","evidenceText":"Schedule a daily morning plan"}',
+        "Schedule a daily morning plan",
+        "telegram:schedule-1",
+    )
+
+    assert taskResult["status"] == "PENDING_APPROVAL"
+    assert scheduleResult["status"] == "PENDING_APPROVAL"
+    assert [request[0] for request in approvalRequests] == [
+        "CREATE_TASK",
+        "CREATE_SCHEDULE",
+    ]
+
+
+def testWorkLifecycleToolsUseCoreAndArchiveApproval(monkeypatch):
+    """Reversible lifecycle tools call Core while archival creates only an approval card."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramWorkLifecycle", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    getRequests = []
+    patchRequests = []
+    postRequests = []
+    approvalRequests = []
+
+    monkeypatch.setattr(
+        dispatcher,
+        "getJson",
+        lambda url, headers: getRequests.append((url, headers))
+        or (
+            {"id": "case-1", "notes": [], "milestones": []}
+            if "/cases/" in url
+            else [{"id": "task-1", "title": "Submit application", "status": "OPEN"}]
+        ),
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "patchJson",
+        lambda url, payload, headers: patchRequests.append((url, payload, headers))
+        or {"id": "task-1", "status": "COMPLETED"},
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "postJson",
+        lambda url, payload, headers: postRequests.append((url, payload, headers))
+        or {"id": "note-1", "text": "Applied to Acme"},
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "sendApprovalRequest",
+        lambda secrets, actionType, payload, label, idempotencyKey="": approvalRequests.append(
+            (actionType, payload, label, idempotencyKey)
+        )
+        or "Approval card sent.",
+    )
+
+    searchResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "search_work_items",
+        '{"workItemKind":"TASK","query":"application"}',
+        "Find my application task",
+    )
+    caseDetailsResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "get_case_details",
+        '{"caseId":"case-1"}',
+        "Show my job search case details",
+    )
+    updateResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "update_work_item",
+        '{"workItemKind":"TASK","workItemId":"task-1","status":"COMPLETED",'
+        '"evidenceText":"Mark my application task complete"}',
+        "Mark my application task complete",
+        "telegram:update-task",
+    )
+    noteResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "add_case_note",
+        '{"caseId":"case-1","text":"Applied to Acme",'
+        '"evidenceText":"Add a note that I applied to Acme"}',
+        "Add a note that I applied to Acme",
+    )
+    archiveResult = dispatcher.executeSageTool(
+        {"SAGE_PROPOSAL_TOKEN": "proposal"},
+        "archive_work_item",
+        '{"workItemKind":"TASK","workItemId":"task-1",'
+        '"title":"Submit application","evidenceText":"Archive my application task"}',
+        "Archive my application task",
+        "telegram:archive-task",
+    )
+
+    assert searchResult["results"][0]["id"] == "task-1"
+    assert caseDetailsResult["record"]["id"] == "case-1"
+    assert updateResult["record"]["status"] == "COMPLETED"
+    assert noteResult["record"]["id"] == "note-1"
+    assert archiveResult["status"] == "PENDING_APPROVAL"
+    assert len(getRequests) == 2
+    assert len(patchRequests) == len(postRequests) == 1
+    assert approvalRequests[0][0] == "ARCHIVE_WORK_ITEM"
+
+
 def testUngroundedPreferenceSaveClaimIsRejected():
     """Model wording cannot manufacture a context-write receipt."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
