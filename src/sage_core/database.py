@@ -326,7 +326,115 @@ class SageDatabase:
                     status TEXT NOT NULL DEFAULT 'PENDING',
                     received_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS observer_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS observer_sources (
+                    id TEXT PRIMARY KEY,
+                    source_kind TEXT NOT NULL,
+                    browser_family TEXT,
+                    profile_id TEXT NOT NULL,
+                    profile_label TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    UNIQUE(source_kind, browser_family, profile_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS observer_sessions (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    last_event_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    status TEXT NOT NULL,
+                    activity_category TEXT,
+                    summary TEXT,
+                    event_count INTEGER NOT NULL DEFAULT 0,
+                    analysis_status TEXT NOT NULL DEFAULT 'PENDING',
+                    analysis_attempts INTEGER NOT NULL DEFAULT 0,
+                    analysis_claimed_at TEXT,
+                    next_attempt_at TEXT,
+                    error_type TEXT,
+                    FOREIGN KEY (source_id) REFERENCES observer_sources(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS observer_events (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    url TEXT,
+                    domain TEXT,
+                    title TEXT,
+                    page_text TEXT,
+                    search_query TEXT,
+                    active_duration_seconds INTEGER,
+                    video_json TEXT,
+                    content_hash TEXT NOT NULL,
+                    processing_status TEXT NOT NULL,
+                    raw_expires_at TEXT NOT NULL,
+                    extract_expires_at TEXT,
+                    FOREIGN KEY (source_id) REFERENCES observer_sources(id),
+                    FOREIGN KEY (session_id) REFERENCES observer_sessions(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS observer_memories (
+                    id TEXT PRIMARY KEY,
+                    memory_kind TEXT NOT NULL,
+                    trust_level TEXT NOT NULL,
+                    subject_key TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    reasoning_summary TEXT NOT NULL,
+                    evidence_count INTEGER NOT NULL,
+                    independent_session_count INTEGER NOT NULL,
+                    is_uncertain INTEGER NOT NULL DEFAULT 0,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(memory_kind, trust_level, subject_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS observer_memory_evidence (
+                    memory_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    evidence_excerpt TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    PRIMARY KEY (memory_id, event_id),
+                    FOREIGN KEY (memory_id) REFERENCES observer_memories(id) ON DELETE CASCADE,
+                    FOREIGN KEY (event_id) REFERENCES observer_events(id),
+                    FOREIGN KEY (session_id) REFERENCES observer_sessions(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS observer_memory_candidates (
+                    id TEXT PRIMARY KEY,
+                    memory_kind TEXT NOT NULL,
+                    subject_key TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    reasoning_summary TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    evidence_event_ids_json TEXT NOT NULL,
+                    is_uncertain INTEGER NOT NULL DEFAULT 0,
+                    observed_at TEXT NOT NULL,
+                    UNIQUE(memory_kind, subject_key, session_id),
+                    FOREIGN KEY (session_id) REFERENCES observer_sessions(id)
+                );
                 """
+            )
+            connection.execute(
+                """CREATE VIRTUAL TABLE IF NOT EXISTS observer_memory_fts
+                   USING fts5(memory_id UNINDEXED, subject_key, summary)"""
             )
             self._addTaskColumnIfMissing(connection, "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")
             self._addTaskColumnIfMissing(connection, "due_at", "TEXT")
@@ -340,6 +448,15 @@ class SageDatabase:
             self._addApprovalColumnIfMissing(connection, "idempotency_key", "TEXT")
             self._addEmailDraftColumnIfMissing(connection, "idempotency_key", "TEXT")
             self._addContextRevisionColumnIfMissing(connection, "idempotency_key", "TEXT")
+            self._addObserverSessionColumnIfMissing(
+                connection, "analysis_status", "TEXT NOT NULL DEFAULT 'PENDING'"
+            )
+            self._addObserverSessionColumnIfMissing(
+                connection, "analysis_attempts", "INTEGER NOT NULL DEFAULT 0"
+            )
+            self._addObserverSessionColumnIfMissing(connection, "analysis_claimed_at", "TEXT")
+            self._addObserverSessionColumnIfMissing(connection, "next_attempt_at", "TEXT")
+            self._addObserverSessionColumnIfMissing(connection, "error_type", "TEXT")
             connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS approval_requests_idempotency_key
                    ON approval_requests(idempotency_key) WHERE idempotency_key IS NOT NULL"""
@@ -434,4 +551,19 @@ class SageDatabase:
         if columnName not in revisionColumns:
             connection.execute(
                 f"ALTER TABLE context_revisions ADD COLUMN {columnName} {columnDefinition}"
+            )
+
+    def _addObserverSessionColumnIfMissing(
+        self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
+    ) -> None:
+        """Add retry state without discarding activity sessions collected before upgrades."""
+        sessionColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute(
+                "PRAGMA table_info(observer_sessions)"
+            ).fetchall()
+        }
+        if columnName not in sessionColumns:
+            connection.execute(
+                f"ALTER TABLE observer_sessions ADD COLUMN {columnName} {columnDefinition}"
             )

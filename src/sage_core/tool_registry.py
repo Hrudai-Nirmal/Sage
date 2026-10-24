@@ -140,6 +140,21 @@ def getToolDefinitions() -> list[dict[str, object]]:
         {
             "type": "function",
             "function": {
+                "name": "search_activity_memory",
+                "description": (
+                    "Search Sage Observer's evidence-backed observed and inferred activity "
+                    "memories. Use for questions about what the user researched, learned, "
+                    "watched, or worked on across prior computer sessions. Results label "
+                    "trust, confidence, dates, and evidence counts."
+                ),
+                "parameters": _objectSchema(
+                    {"query": {"type": "string", "maxLength": 2000}}, ["query"]
+                ),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "remember_context",
                 "description": (
                     "Record one fact only when the user explicitly asks Sage to remember, save, "

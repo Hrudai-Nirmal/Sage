@@ -105,6 +105,54 @@ def testRecognizesOnlyApprovedTelegramModeCommands():
     assert dispatcher.getModeCommand("please use eco") is None
 
 
+def testParsesAndExecutesExplicitObserverControlCommands(monkeypatch):
+    """Telegram exposes reversible Observer controls without natural-language guessing."""
+    dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"
+    moduleSpec = spec_from_file_location("sageTelegramDispatcherObserver", dispatcherPath)
+    assert moduleSpec is not None and moduleSpec.loader is not None
+    dispatcher = module_from_spec(moduleSpec)
+    moduleSpec.loader.exec_module(dispatcher)
+    patchedPayloads = []
+
+    monkeypatch.setattr(
+        dispatcher,
+        "patchJson",
+        lambda url, payload, headers: patchedPayloads.append(payload)
+        or {
+            "isCollecting": payload["monitoringState"] == "ON",
+            "monitoringState": payload["monitoringState"],
+            "pauseUntil": payload.get("pauseUntil"),
+            "runtimeMode": "NORMAL",
+        },
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "getJson",
+        lambda url, headers: {
+            "isCollecting": True,
+            "monitoringState": "ON",
+            "pauseUntil": None,
+            "runtimeMode": "NORMAL",
+        },
+    )
+
+    assert dispatcher.getObserverCommand("/observer-on") == {"action": "ON"}
+    assert dispatcher.getObserverCommand("/observer-off@Hrudai_bot") == {"action": "OFF"}
+    assert dispatcher.getObserverCommand("/observer-pause 15m") == {
+        "action": "PAUSE",
+        "duration": "15m",
+    }
+    assert dispatcher.getObserverCommand("/observer-pause someday") is None
+    assert dispatcher.getObserverCommand("please pause observer") is None
+    assert "ON" in dispatcher.executeObserverCommand(
+        {"SAGE_OPERATOR_TOKEN": "operator-token"}, {"action": "ON"}
+    )
+    assert "NORMAL" in dispatcher.executeObserverCommand(
+        {"SAGE_OPERATOR_TOKEN": "operator-token"}, {"action": "STATUS"}
+    )
+    assert patchedPayloads == [{"monitoringState": "ON"}]
+
+
 def testReconcilesDashboardModeWithoutStartingDuplicateModels(monkeypatch):
     """A persisted local mode change controls each exact model launch agent once."""
     dispatcherPath = Path(__file__).parents[2] / "scripts" / "run-telegram-dispatcher.py"

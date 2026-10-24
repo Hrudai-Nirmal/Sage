@@ -39,6 +39,7 @@ def testRegistryExposesOnlyImplementedGoogleTools():
         "search_downloads",
         "search_drive",
         "search_gmail",
+        "search_activity_memory",
         "search_work_items",
         "send_gmail_message",
         "update_case_milestone",
@@ -95,6 +96,9 @@ def testValidatesPersonalContextTools():
     assert validateToolArguments("search_context", '{"query":"language"}') == {
         "query": "language"
     }
+    assert validateToolArguments(
+        "search_activity_memory", '{"query":"watches researched recently"}'
+    ) == {"query": "watches researched recently"}
     assert validateToolArguments(
         "forget_context", '{"recordId":"8c632bdd-e469-4b1a-a176-1f7a9cbd9a48"}'
     ) == {"recordId": "8c632bdd-e469-4b1a-a176-1f7a9cbd9a48"}

@@ -30,6 +30,8 @@ def createConfiguredApp() -> FastAPI:
             "downloads": _getRequiredEnvironmentPath("SAGE_DOWNLOADS_IMPORT_ROOT"),
         },
         operatorToken=_getRequiredEnvironmentValue("SAGE_OPERATOR_TOKEN"),
+        observerAllowedOrigins=_getRequiredObserverOrigins(),
+        observerIngressToken=_getRequiredEnvironmentValue("SAGE_OBSERVER_INGRESS_TOKEN"),
         proposalToken=_getRequiredEnvironmentValue("SAGE_PROPOSAL_TOKEN"),
         researchService=OnlineResearchService(
             database=SageDatabase(databasePath),
@@ -92,3 +94,17 @@ def _getRequiredGoogleAccounts() -> dict[str, str]:
         accountKey.strip(): accountEmail.strip()
         for accountKey, accountEmail in parsedAccountMap.items()
     }
+
+
+def _getRequiredObserverOrigins() -> set[str]:
+    """Read exact stable extension origins and reject broad or non-extension values."""
+    rawOrigins = _getRequiredEnvironmentValue("SAGE_OBSERVER_ALLOWED_ORIGINS")
+    origins = {origin.strip() for origin in rawOrigins.split(",") if origin.strip()}
+    if not origins or any(
+        not origin.startswith("chrome-extension://") or "*" in origin
+        for origin in origins
+    ):
+        raise RuntimeError(
+            "SAGE_OBSERVER_ALLOWED_ORIGINS must contain exact chrome-extension origins"
+        )
+    return origins

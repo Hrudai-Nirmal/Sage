@@ -1,0 +1,47 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: Canvas;
+  color: CanvasText;
+}
+
+main {
+  box-sizing: border-box;
+  max-width: 38rem;
+  margin: 4rem auto;
+  padding: 0 1.5rem;
+}
+
+form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+label:not(.toggle) {
+  display: grid;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+input:not([type="checkbox"]) {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid GrayText;
+  border-radius: 0.5rem;
+  font: inherit;
+}
+
+button {
+  width: fit-content;
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: #0a84ff;
+  color: white;
+  font: inherit;
+  font-weight: 600;
+}

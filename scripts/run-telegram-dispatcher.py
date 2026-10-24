@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
@@ -38,6 +38,9 @@ from sage_core.drive_action_state import DriveActionRepository
 from sage_core.email_intelligence import classifyEmail
 from sage_core.google_jobs import GoogleJobRepository
 from sage_core.google_action_state import GoogleActionRepository
+from sage_core.observer.iris import IrisObserverAnalyzer
+from sage_core.observer.processing import ObserverProcessingService
+from sage_core.observer.state import ObserverStateRepository
 from sage_core.schedule_state import ScheduleStateRepository
 from sage_core.tool_registry import getToolDefinitions, validateToolArguments
 
@@ -112,6 +115,67 @@ def getModeCommand(messageText: str) -> str | None:
         "/sleep": "SLEEP",
         "/shutdown": "SHUTDOWN",
     }.get(commandName.lower())
+
+
+def getObserverCommand(messageText: str) -> dict[str, str] | None:
+    """Parse only explicit Observer controls so ordinary conversation cannot toggle monitoring."""
+    commandToken, separator, commandBody = messageText.strip().partition(" ")
+    commandName = commandToken.split("@", 1)[0].lower()
+    if commandName == "/observer-on" and not separator:
+        return {"action": "ON"}
+    if commandName == "/observer-off" and not separator:
+        return {"action": "OFF"}
+    if commandName == "/observer-status" and not separator:
+        return {"action": "STATUS"}
+    if commandName != "/observer-pause" or not separator:
+        return None
+    duration = " ".join(commandBody.lower().split())
+    if duration not in {"15m", "1h", "manual", "tomorrow", "until tomorrow"}:
+        return None
+    return {"action": "PAUSE", "duration": duration}
+
+
+def executeObserverCommand(
+    secrets: dict[str, str], observerCommand: dict[str, str]
+) -> str:
+    """Apply one explicit Observer control through Core's operator boundary."""
+    action = observerCommand["action"]
+    operatorHeaders = {
+        "Content-Type": "application/json",
+        "X-Sage-Operator-Token": secrets["SAGE_OPERATOR_TOKEN"],
+    }
+    if action == "STATUS":
+        statusResponse = getJson(f"{CORE_URL}/v1/observer/status", {})
+    else:
+        monitoringPayload: dict[str, object] = {
+            "monitoringState": "PAUSED" if action == "PAUSE" else action
+        }
+        if action == "PAUSE":
+            duration = observerCommand["duration"]
+            currentTime = datetime.now(ZoneInfo("Asia/Kolkata"))
+            if duration == "15m":
+                monitoringPayload["pauseUntil"] = (currentTime + timedelta(minutes=15)).isoformat()
+            elif duration == "1h":
+                monitoringPayload["pauseUntil"] = (currentTime + timedelta(hours=1)).isoformat()
+            elif duration in {"tomorrow", "until tomorrow"}:
+                tomorrow = currentTime + timedelta(days=1)
+                monitoringPayload["pauseUntil"] = tomorrow.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat()
+        statusResponse = patchJson(
+            f"{CORE_URL}/v1/observer/status",
+            monitoringPayload,
+            operatorHeaders,
+        )
+    if not isinstance(statusResponse, dict):
+        raise RuntimeError("Observer status response is invalid")
+    pauseUntil = statusResponse.get("pauseUntil")
+    effectiveState = "collecting" if statusResponse.get("isCollecting") else "not collecting"
+    pauseSummary = f" until {pauseUntil}" if pauseUntil else ""
+    return (
+        f"Observer: {statusResponse.get('monitoringState', 'UNKNOWN')}{pauseSummary}; "
+        f"Sage mode: {statusResponse.get('runtimeMode', 'UNKNOWN')}; {effectiveState}."
+    )
 
 
 def getContextCommand(messageText: str) -> dict[str, str] | None:
@@ -671,6 +735,21 @@ def executeSageTool(
             "status": "COMPLETE",
             "source": "confirmed-personal-context",
             "results": getContextRepository().searchRecords(str(arguments["query"])),
+        }
+    if toolName == "search_activity_memory":
+        queryString = urlencode(
+            {"query": arguments["query"], "resultLimit": 12}
+        )
+        return {
+            "status": "COMPLETE",
+            "source": "observer-memory",
+            "trustNotice": (
+                "OBSERVED is direct activity evidence; INFERRED is a qualified interpretation, "
+                "not a confirmed personal fact."
+            ),
+            "results": getJson(
+                f"{CORE_URL}/v1/observer/memories?{queryString}", {}
+            ),
         }
     if toolName == "search_work_items":
         queryString = urlencode(
@@ -1638,6 +1717,7 @@ def getCapabilityDenialFallback(
         "drive.search": "search_drive",
         "filesystem.search_downloads": "search_downloads",
         "gmail.search": "search_gmail",
+        "observer.memory.search": "search_activity_memory",
     }
     expectedToolName = toolNamesByCapability.get(deniedCapabilityId)
     for toolResult in toolResults:
@@ -1655,7 +1735,12 @@ def getCapabilityDenialFallback(
             return formatCalendarSearch(results)
         if expectedToolName == "search_drive":
             return formatDriveSearch(results)
-        if expectedToolName in {"search_context", "search_documents", "search_downloads"}:
+        if expectedToolName in {
+            "search_activity_memory",
+            "search_context",
+            "search_documents",
+            "search_downloads",
+        }:
             if not results:
                 return "The configured search completed successfully with no matches."
             return json.dumps(results[:10], ensure_ascii=False, indent=2)[:4_000]
@@ -2422,6 +2507,7 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
             (messageId,),
         )
     modeCommand = getModeCommand(messageText)
+    observerCommand = getObserverCommand(messageText)
     if modeCommand == "SHUTDOWN":
         replyText = "Sage is shutting down all Sage services and Docker cleanly."
         try:
@@ -2451,6 +2537,9 @@ def dispatchNextMessage(secrets: dict[str, str]) -> bool:
                 "ECO": "Sage is switching to Eco mode. Models will load only when needed.",
                 "SLEEP": "Sage is going to sleep. Telegram mode controls remain available.",
             }[modeCommand]
+            sendTelegramMessage(secrets, replyText)
+        elif observerCommand is not None:
+            replyText = executeObserverCommand(secrets, observerCommand)
             sendTelegramMessage(secrets, replyText)
         elif getCurrentMode() == "SLEEP":
             replyText = "Sage is sleeping. Use /normal or /eco when you need me."
@@ -2617,6 +2706,15 @@ def main() -> None:
     googleJobRepository = GoogleJobRepository(database)
     googleActionRepository = GoogleActionRepository(database)
     driveActionRepository = DriveActionRepository(database)
+    observerProcessingService = ObserverProcessingService(
+        ObserverStateRepository(database),
+        IrisObserverAnalyzer(
+            apiKey=secrets["SAGE_MODEL_API_KEY"],
+            apiUrl=IRIS_URL,
+            modelId=IRIS_MODEL_ID,
+            promptPath=PROJECT_ROOT / "prompts" / "iris-observer-system.md",
+        ),
+    )
     recoverInterruptedWork()
     scheduleStateRepository.recoverInterruptedDeliveries()
     googleJobRepository.backfillCalendarReminders()
@@ -2635,6 +2733,10 @@ def main() -> None:
             dispatchNextEmailTriage(secrets, googleJobRepository)
             dispatchNextDriveAction(secrets, driveActionRepository)
             dispatchNextGoogleAction(secrets, googleActionRepository)
+            if getCurrentMode() == "NORMAL":
+                observerProcessingService.processNextSession(
+                    datetime.now(ZoneInfo("UTC"))
+                )
         except Exception as error:
             logging.error(
                 "Telegram dispatcher iteration failed: %s: %s",

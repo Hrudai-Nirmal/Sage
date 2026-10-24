@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sage Observer settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <h1>Sage Observer</h1>
+      <p>Pair this browser profile with the local Sage app. The token grants event submission only.</p>
+      <form id="settings-form">
+        <label>
+          Profile label
+          <input id="profile-label" name="profileLabel" maxlength="200" autocomplete="off">
+        </label>
+        <label>
+          Local ingress token
+          <input id="observer-token" name="observerToken" type="password" autocomplete="off" required>
+        </label>
+        <label class="toggle">
+          <input id="is-enabled" name="isEnabled" type="checkbox">
+          Monitor this profile
+        </label>
+        <button type="submit">Save locally</button>
+        <p id="status" role="status" aria-live="polite"></p>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

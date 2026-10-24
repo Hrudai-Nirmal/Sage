@@ -8,7 +8,8 @@ from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from starlette.middleware.cors import CORSMiddleware
 
 from sage_core.approval_state import ApprovalStateRepository
 from sage_core.context_state import ContextStateRepository
@@ -17,6 +18,7 @@ from sage_core.document_state import DocumentStateRepository
 from sage_core.email_draft_state import EmailDraftStateRepository
 from sage_core.google_state import GoogleStateRepository
 from sage_core.online_research import OnlineResearchService
+from sage_core.observer.state import ObserverStateRepository
 from sage_core.operator_state import OperatorStateRepository
 from sage_core.operator_ui import getOperatorHtml
 from sage_core.schedule_state import ScheduleStateRepository
@@ -439,6 +441,69 @@ class DriveFilePayload(BaseModel):
     webViewLink: str = Field(max_length=2_000)
 
 
+class ObserverVideoPayload(BaseModel):
+    """Bound YouTube metadata without accepting captions or arbitrary page state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channel: str | None = Field(default=None, max_length=500)
+    descriptionExcerpt: str | None = Field(default=None, max_length=2_000)
+    durationSeconds: int | None = Field(default=None, ge=0, le=86_400)
+    progressSeconds: int | None = Field(default=None, ge=0, le=86_400)
+    videoId: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class ObserverBrowserEventPayload(BaseModel):
+    """Validate one untrusted browser observation before policy normalization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    activeDurationSeconds: int | None = Field(default=None, ge=0, le=86_400)
+    browserFamily: Literal["ARC", "BRAVE", "CHROME", "CHROMIUM", "EDGE"]
+    eventId: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    eventType: Literal[
+        "ACTIVE_PAGE", "IDLE", "NAVIGATION", "RESUME", "SEARCH", "VIDEO_PROGRESS"
+    ]
+    occurredAt: str = Field(min_length=1, max_length=100)
+    pageText: str | None = Field(default=None, max_length=12_000)
+    profileId: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.-]+$")
+    profileLabel: str | None = Field(default=None, max_length=200)
+    searchQuery: str | None = Field(default=None, max_length=2_000)
+    title: str | None = Field(default=None, max_length=2_000)
+    url: str | None = Field(default=None, max_length=8_192)
+    video: ObserverVideoPayload | None = None
+
+    @model_validator(mode="after")
+    def validateOccurredAt(self) -> "ObserverBrowserEventPayload":
+        """Require an unambiguous timestamp before assigning a durable session."""
+        from datetime import datetime
+
+        occurredAt = datetime.fromisoformat(self.occurredAt)
+        if occurredAt.tzinfo is None:
+            raise ValueError("Observer occurredAt must include a timezone")
+        return self
+
+
+class ObserverMonitoringPayload(BaseModel):
+    """Validate explicit local Observer controls independently from Sage mode."""
+
+    monitoringState: Literal["OFF", "ON", "PAUSED"]
+    pauseUntil: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def validatePauseUntil(self) -> "ObserverMonitoringPayload":
+        """Require timezone-aware bounded pauses and reject irrelevant timestamps."""
+        from datetime import datetime
+
+        if self.monitoringState != "PAUSED" and self.pauseUntil is not None:
+            raise ValueError("pauseUntil is valid only for PAUSED")
+        if self.pauseUntil is not None:
+            pauseTimestamp = datetime.fromisoformat(self.pauseUntil)
+            if pauseTimestamp.tzinfo is None:
+                raise ValueError("Observer pauseUntil must include a timezone")
+        return self
+
+
 def createApp(
     databasePath: Path,
     dataRoot: Path | None = None,
@@ -447,6 +512,8 @@ def createApp(
     googleIngressToken: str = "",
     importRoots: dict[str, Path] | None = None,
     operatorToken: str = "",
+    observerAllowedOrigins: set[str] | None = None,
+    observerIngressToken: str = "",
     proposalToken: str = "",
     approvalToken: str = "",
     telegramAllowedUserId: int | None = None,
@@ -478,6 +545,7 @@ def createApp(
     systemStateRepository = SystemStateRepository(database)
     workStateRepository = WorkStateRepository(database)
     operatorStateRepository = OperatorStateRepository(database)
+    observerStateRepository = ObserverStateRepository(database)
     telegramStateRepository = TelegramStateRepository(
         database=database,
         allowedUserId=telegramAllowedUserId,
@@ -485,6 +553,13 @@ def createApp(
         topicIds=telegramTopicIds,
     )
     app = FastAPI(title="Sage Core", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=sorted(observerAllowedOrigins or set()),
+        allow_methods=["POST"],
+        allow_headers=["Content-Type", "X-Sage-Observer-Token"],
+        max_age=600,
+    )
 
     @app.get("/operator", response_class=HTMLResponse)
     def getOperatorDashboard() -> str:
@@ -513,6 +588,90 @@ def createApp(
             "mode": systemStateRepository.getMode(),
             "status": "healthy",
         }
+
+    @app.post("/v1/observer/events", status_code=status.HTTP_201_CREATED)
+    def acceptObserverEvent(
+        observerEvent: ObserverBrowserEventPayload,
+        response: Response,
+        origin: str = Header(alias="Origin"),
+        sageObserverToken: str = Header(alias="X-Sage-Observer-Token"),
+    ) -> dict[str, str]:
+        """Accept one extension event through an ingress-only authenticated boundary."""
+        _validateToken(sageObserverToken, observerIngressToken)
+        if origin not in (observerAllowedOrigins or set()):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Observer extension origin is not allowlisted",
+            )
+        monitoringStatus = observerStateRepository.getMonitoringStatus(
+            systemStateRepository.getMode()
+        )
+        if not monitoringStatus["isCollecting"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Observer collection is paused by user or runtime state",
+            )
+        try:
+            receipt = observerStateRepository.recordBrowserEvent(
+                observerEvent.model_dump(exclude_none=True)
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
+        if receipt["status"] == "DUPLICATE":
+            response.status_code = status.HTTP_200_OK
+        return receipt
+
+    @app.get("/v1/observer/status")
+    def getObserverStatus() -> dict[str, object]:
+        """Return the persisted and effective Observer state for local surfaces."""
+        return observerStateRepository.getMonitoringStatus(systemStateRepository.getMode())
+
+    @app.patch("/v1/observer/status")
+    def updateObserverStatus(
+        monitoringUpdate: ObserverMonitoringPayload,
+        sageOperatorToken: str = Header(alias="X-Sage-Operator-Token"),
+    ) -> dict[str, object]:
+        """Apply an explicit local monitoring control through the operator credential."""
+        from datetime import datetime
+
+        _validateToken(sageOperatorToken, operatorToken)
+        pauseUntil = (
+            datetime.fromisoformat(monitoringUpdate.pauseUntil)
+            if monitoringUpdate.pauseUntil is not None
+            else None
+        )
+        return observerStateRepository.setMonitoringState(
+            monitoringUpdate.monitoringState,
+            pauseUntil,
+            systemStateRepository.getMode(),
+        )
+
+    @app.get("/v1/observer/memories")
+    def searchObserverMemories(
+        query: str = "",
+        resultLimit: int = 20,
+    ) -> list[dict[str, object]]:
+        """Search local observed and inferred memories without loading the full store."""
+        if len(query) > 2_000 or resultLimit < 1 or resultLimit > 100:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Observer memory search bounds are invalid",
+            )
+        try:
+            return observerStateRepository.searchMemories(query, resultLimit)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            ) from error
+
+    @app.get("/v1/observer/memories/{memoryId}/evidence")
+    def listObserverMemoryEvidence(memoryId: str) -> list[dict[str, object]]:
+        """Expose bounded source provenance for local inspection and challenge."""
+        return observerStateRepository.listMemoryEvidence(memoryId)
 
     @app.patch("/v1/system/mode")
     def updateSystemMode(

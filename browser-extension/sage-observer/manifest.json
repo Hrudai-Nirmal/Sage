@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Sage Observer",
+  "version": "0.1.0",
+  "description": "Locally records permitted browser activity for Sage.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAt5lCjP4cQO5BbMCR7qI8L64PTYvxoNHp0dLwADtHCE9wdPA/LtjQ4oUmrATu+vDaWJVCOtbRh/SIXtMXRDIV9oQo4gb40IwVfoVDUxwM5EPqGTU0+9rA+8/586rFpIIGIKuFiuqWUTeDAO71rKoPND/wKxn+URh/AEkxOdni21GsRq8LowcptKk73sMPUbSN+Jz9/X57BLYOAx43Vb6+2BFh1io/R1poppA5crnjOONocGevKWSFpV6Ynnje4a8fTSlSHWrXCin/ciD5P4zLd3hiFjq/uz3rB4J2YI5f2mLkkdxze1plq7q+gDgV/xwDpNfsfuuESP8GlHlXykLt2QIDAQAB",
+  "incognito": "not_allowed",
+  "permissions": [
+    "alarms",
+    "idle",
+    "storage",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:8787/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_about_blank": false
+    }
+  ],
+  "action": {
+    "default_title": "Sage Observer"
+  },
+  "options_page": "options.html"
+}

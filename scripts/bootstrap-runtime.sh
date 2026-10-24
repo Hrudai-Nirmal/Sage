@@ -22,6 +22,9 @@ for relativeDirectory in \
   "documents/personal" \
   "imports" \
   "logs" \
+  "observer/events" \
+  "observer/exports" \
+  "observer/temp" \
   "research" \
   "secrets" \
   "skills/approved" \
@@ -37,6 +40,8 @@ if [[ ! -f "${secretRoot}/core.env" ]]; then
   {
     print "SAGE_APPROVAL_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_OPERATOR_TOKEN=$(openssl rand -hex 32)"
+    print "SAGE_OBSERVER_INGRESS_TOKEN=$(openssl rand -hex 32)"
+    print "SAGE_OBSERVER_ALLOWED_ORIGINS=chrome-extension://ehkgdljmlcdijndcbcjgcpphkogmjbod"
     print "SAGE_PROPOSAL_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_TELEGRAM_INGRESS_TOKEN=$(openssl rand -hex 32)"
   } > "${secretRoot}/core.env"
@@ -44,6 +49,14 @@ fi
 
 if ! grep -q '^SAGE_TELEGRAM_INGRESS_TOKEN=' "${secretRoot}/core.env"; then
   print "SAGE_TELEGRAM_INGRESS_TOKEN=$(openssl rand -hex 32)" >> "${secretRoot}/core.env"
+fi
+
+if ! grep -q '^SAGE_OBSERVER_INGRESS_TOKEN=' "${secretRoot}/core.env"; then
+  print "SAGE_OBSERVER_INGRESS_TOKEN=$(openssl rand -hex 32)" >> "${secretRoot}/core.env"
+fi
+
+if ! grep -q '^SAGE_OBSERVER_ALLOWED_ORIGINS=' "${secretRoot}/core.env"; then
+  print "SAGE_OBSERVER_ALLOWED_ORIGINS=chrome-extension://ehkgdljmlcdijndcbcjgcpphkogmjbod" >> "${secretRoot}/core.env"
 fi
 
 if ! grep -q '^SAGE_RESEARCH_TOKEN=' "${secretRoot}/core.env"; then

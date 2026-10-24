@@ -912,6 +912,11 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
     monkeypatch.setenv("SAGE_GOOGLE_INGRESS_TOKEN", "google-ingress-token")
     monkeypatch.setenv("SAGE_GOOGLE_CALENDAR_ACCOUNT_KEY", "personal-work")
     monkeypatch.setenv("SAGE_OPERATOR_TOKEN", "operator-token")
+    monkeypatch.setenv(
+        "SAGE_OBSERVER_ALLOWED_ORIGINS",
+        "chrome-extension://ehkgdljmlcdijndcbcjgcpphkogmjbod",
+    )
+    monkeypatch.setenv("SAGE_OBSERVER_INGRESS_TOKEN", "observer-token")
     monkeypatch.setenv("SAGE_PROPOSAL_TOKEN", "proposal-token")
     monkeypatch.setenv("SAGE_RESEARCH_TOKEN", "research-token")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-token")
@@ -954,9 +959,26 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
             },
             headers={"X-Sage-Google-Ingress-Token": "google-ingress-token"},
         )
+        observerResponse = client.post(
+            "/v1/observer/events",
+            json={
+                "browserFamily": "CHROME",
+                "eventId": "configured-observer-event",
+                "eventType": "NAVIGATION",
+                "occurredAt": "2026-10-25T09:00:00+05:30",
+                "profileId": "default",
+                "title": "Configured Observer",
+                "url": "https://example.com/observer",
+            },
+            headers={
+                "Origin": "chrome-extension://ehkgdljmlcdijndcbcjgcpphkogmjbod",
+                "X-Sage-Observer-Token": "observer-token",
+            },
+        )
 
     assert response.status_code == 201
     assert gmailResponse.status_code == 201
+    assert observerResponse.status_code == 201
 
 
 def testAcceptsOnlyAllowlistedTelegramMessagesFromConfiguredForumTopics(tmp_path):
@@ -1185,8 +1207,12 @@ def testBootstrapsManagedDataRootAndPrivateCredentials(tmp_path):
     assert bootstrapProcess.returncode == 0
     assert (dataRoot / "documents" / "identity").is_dir()
     assert (dataRoot / "skills" / "pending").is_dir()
+    assert (dataRoot / "observer" / "events").is_dir()
+    assert (dataRoot / "observer" / "exports").is_dir()
+    assert (dataRoot / "observer" / "temp").is_dir()
     assert (dataRoot / "temp").is_dir()
     assert (dataRoot / "secrets" / "core.env").is_file()
+    assert "SAGE_OBSERVER_INGRESS_TOKEN=" in (dataRoot / "secrets" / "core.env").read_text()
     assert (dataRoot / "secrets" / "core.env").stat().st_mode & 0o077 == 0
     assert (projectRoot / ".env").is_file()
 

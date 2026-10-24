@@ -65,6 +65,13 @@ def getCapabilityPolicies() -> dict[str, CapabilityPolicy]:
         ("filesystem.search_downloads", "Search allowlisted Downloads filenames", "automatic read", True, "search_downloads"),
         ("documents.search", "Search Sage-managed documents", "automatic read", True, "search_documents"),
         ("context.search", "Search confirmed personal context", "automatic read", True, "search_context"),
+        (
+            "observer.memory.search",
+            "Search evidence-backed observed and inferred activity memory",
+            "automatic local read; results identify observation versus inference",
+            True,
+            "search_activity_memory",
+        ),
         ("context.remember", "Create or revise one explicitly requested context record", "ordinary records are direct; sensitive categories require the user's approval button", False, "remember_context"),
         ("context.forget", "Redact one exact context record and its retained values", "requires the user's approval button", False, "forget_context"),
         ("documents.import", "Copy an explicitly named Downloads file into Sage storage", "explicit reversible write", True, "import_download_file"),
@@ -222,6 +229,7 @@ def getCapabilityDisplayName(capabilityId: str) -> str:
         "filesystem.search_downloads": "Downloads search",
         "documents.search": "managed-document search",
         "context.search": "personal-context search",
+        "observer.memory.search": "activity-memory search",
         "context.remember": "personal-context memory",
         "context.forget": "personal-context redaction",
         "online.research": "online research",
@@ -244,6 +252,10 @@ def getDeniedCapabilityId(replyText: str) -> str | None:
         ("drive.search", r"\b(?:google\s+drive|drive)\b"),
         ("filesystem.search_downloads", r"\bdownloads?\b"),
         ("documents.search", r"\b(?:managed\s+documents?|sage\s+documents?)\b"),
+        (
+            "observer.memory.search",
+            r"\b(?:activity\s+memor(?:y|ies)|observed\s+activit(?:y|ies)|browsing\s+history)\b",
+        ),
         ("context.search", r"\b(?:context|memor(?:y|ies)|remembered\s+facts?)\b"),
         ("online.research", r"\b(?:web|online|internet)\b"),
     ]

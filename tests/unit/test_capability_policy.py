@@ -32,6 +32,7 @@ def testCatalogCoversEveryModelToolAndNonToolAbility():
         "schedules.propose",
         "vision.analyze",
         "runtime.mode",
+        "observer.memory.search",
     }.issubset(policies)
 
 
@@ -46,6 +47,8 @@ def testAwarenessPromptStatesConfiguredAbilitiesAndAuthority():
     assert "gmail.draft" in prompt
     assert "does not require approval" in prompt
     assert "gmail.send" in prompt
+    assert "observer.memory.search" in prompt
+    assert "evidence-backed observed and inferred activity memory" in prompt
     assert "requires the user's approval button" in prompt
     assert "Never claim that a listed capability does not exist" in prompt
 

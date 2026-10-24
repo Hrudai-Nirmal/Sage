@@ -14,6 +14,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Telegram images and image/PDF documents are bounded at 20 MB, inspected by Iris, synthesized by Sage, and removed from temporary storage after each request.
 - Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
+- Sage Observer now has a tested browser-to-memory vertical slice: an unpacked Chromium MV3 collector sends authenticated loopback events, Core creates durable activity sessions, the existing Iris instance produces schema-bound analysis, and Sage can search evidence-backed observed/inferred memories with provenance counts.
 
 Telegram routing is configured privately for the chosen forum group. The active Telegram poller is ingress-only; one native dispatcher owns all replies, scheduled deliveries, Calendar reminders, email triage, Drive jobs, and model calls. Gmail is checked every five minutes, Calendar every 30 minutes, and Drive only on demand.
 
@@ -25,7 +26,7 @@ The runtime bootstrap has already been run for this machine. It is safe to rerun
 SAGE_DATA_ROOT=/Users/hrudainirmal/SageData scripts/bootstrap-runtime.sh
 ```
 
-It creates the managed structure, including `context`, `skills`, `tools`, `documents`, `archives`, `research`, `temp`, `backups`, `logs`, and private service credentials. Downloads is the sole configured external source and imports are copy-only.
+It creates the managed structure, including `context`, `skills`, `tools`, `documents`, `archives`, `research`, `observer/events`, `observer/exports`, `observer/temp`, `temp`, `backups`, `logs`, and private service credentials. Downloads is the sole configured external source and imports are copy-only.
 
 Start Docker Desktop, then validate and launch the app services:
 
@@ -44,6 +45,34 @@ scripts/install-launchd.sh
 ```
 
 This registers separate user launch agents for Sage on port `18080` and Iris on port `18081`. Both bind only to loopback and require the private model-server token.
+
+## Browser Observer
+
+The unpacked extension is in `browser-extension/sage-observer`. In each Chrome, Brave, Edge, Arc, or Chromium profile:
+
+1. Open that browser's extensions page and enable developer mode.
+2. Choose **Load unpacked** and select `/Users/hrudainirmal/Projects/Sage/browser-extension/sage-observer`.
+3. Open the extension's options page, give the profile a recognizable label, and paste the private `SAGE_OBSERVER_INGRESS_TOKEN` from `/Users/hrudainirmal/SageData/secrets/core.env`.
+
+The extension ID is stable across profiles: `ehkgdljmlcdijndcbcjgcpphkogmjbod`. Its badge is green when Core accepts events, amber when monitoring is off or unpaired, and grey when Core is unavailable. Incognito is disabled. The collector does not request browser history, downloads, clipboard, debugger, scripting, or native-messaging permissions; its content script skips forms and interactive fields and retains at most 12,000 cleaned characters.
+
+Core strips tracking parameters and likely secrets again, groups activity into five-minute-idle sessions, and sends closed sessions through the existing Iris server from the existing native dispatcher. Ordinary inferred semantic memory requires evidence from two independent sessions. Uncertain classifications are retained only as explicitly uncertain low-confidence memory. Entertainment cannot strengthen semantic interests.
+
+Ask Sage natural questions such as “What watches have I been researching recently?” or “What technologies have I been learning?” Sage can select the read-only `search_activity_memory` capability and must distinguish `OBSERVED`, `INFERRED`, and confirmed context.
+
+Observer controls are exact Telegram commands so ordinary conversation cannot silently change monitoring:
+
+- `/observer-on`
+- `/observer-off`
+- `/observer-pause 15m`
+- `/observer-pause 1h`
+- `/observer-pause until tomorrow`
+- `/observer-pause manual`
+- `/observer-status`
+
+The off state persists across restarts. Normal and Eco permit collection; Sleep and Shutdown are enforced as no-collection states by Core even if an extension is stale or misbehaving.
+
+Architecture, data contracts, retention, and trust boundaries are documented in `docs/observer-architecture.md` and `docs/observer-threat-model.md`. The native SwiftUI observer, battery/Low Power Mode enforcement, memory management UI, and screenshot/OCR path are later vertical slices and are not claimed by this browser slice.
 
 The same installer registers a daily 03:15 IST maintenance agent. It removes only temporary files older than seven days and resets the in-memory cache of either active model server. To stop Sage cleanly without deleting its personal state:
 
@@ -130,5 +159,6 @@ The recurrence suffix is optional and accepts `DAILY` or `WEEKLY`. Reports use t
 - `/task <title>`, `/case <title> | <objective>`, and `/schedule ...` return Telegram approval cards. Only the configured user's one-time Approve or Decline callback can resolve the proposal.
 - Secrets have mode `0600` under `/Users/hrudainirmal/SageData/secrets` and are not tracked by Git.
 - Model services and Docker application ports are loopback-only.
+- Browser Observer ingress requires a separate write-only token and an exact stable extension Origin. Strict CORS preflight, schema validation, dual denylist checks, URL normalization, redaction, and replay-safe event IDs apply before persistence.
 - A model server never starts when its reserved port belongs to another process; a matching existing server is reused instead of duplicated.
 - Online fetches accept only HTTP(S), reject credentials in URLs and non-public resolved addresses, validate redirects, cap pages at 2 MB, and retain at most 30,000 extracted characters per source.
