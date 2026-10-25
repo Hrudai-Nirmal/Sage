@@ -1,26 +1,8 @@
-# Docker services own orchestration and Core; native launchd owns Apple Silicon model processes.
+# Docker owns n8n orchestration; native launchd owns Core and Apple Silicon model processes.
+# Core and host workers must share one macOS SQLite locking domain.
 name: sage
 
 services:
-  sage-core:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.core
-    env_file:
-      - ${SAGE_CORE_ENV_FILE:?Set SAGE_CORE_ENV_FILE in .env}
-      - ${SAGE_TELEGRAM_ENV_FILE:?Set SAGE_TELEGRAM_ENV_FILE in .env}
-      - ${SAGE_ONLINE_ENV_FILE:?Set SAGE_ONLINE_ENV_FILE in .env}
-      - ${SAGE_GOOGLE_ENV_FILE:?Set SAGE_GOOGLE_ENV_FILE in .env}
-    environment:
-      SAGE_DATA_ROOT: /var/lib/sage
-      SAGE_DOWNLOADS_IMPORT_ROOT: /imports/downloads
-    ports:
-      - "127.0.0.1:8787:8787"
-    restart: unless-stopped
-    volumes:
-      - ${SAGE_DATA_ROOT:?Set SAGE_DATA_ROOT in .env}:/var/lib/sage
-      - ${SAGE_DOWNLOADS_HOST_PATH:?Set SAGE_DOWNLOADS_HOST_PATH in .env}:/imports/downloads:ro
-
   n8n:
     image: n8nio/n8n:2.37.10
     env_file:
@@ -49,6 +31,10 @@ services:
       TZ: ${TZ:-Asia/Kolkata}
     ports:
       - "127.0.0.1:5678:5678"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      # Preserve the deployed workflow hostname while source workflows migrate to the explicit alias.
+      - "sage-core:host-gateway"
     restart: unless-stopped
     volumes:
       - n8n-data:/home/node/.n8n

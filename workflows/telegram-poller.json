@@ -81,7 +81,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'http://sage-core:8787' + $json.endpoint }}",
+        "url": "={{ 'http://host.docker.internal:8787' + $json.endpoint }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

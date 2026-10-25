@@ -376,6 +376,8 @@ class SageDatabase:
                     search_query TEXT,
                     active_duration_seconds INTEGER,
                     video_json TEXT,
+                    app_bundle_id TEXT,
+                    app_name TEXT,
                     content_hash TEXT NOT NULL,
                     processing_status TEXT NOT NULL,
                     raw_expires_at TEXT NOT NULL,
@@ -457,6 +459,8 @@ class SageDatabase:
             self._addObserverSessionColumnIfMissing(connection, "analysis_claimed_at", "TEXT")
             self._addObserverSessionColumnIfMissing(connection, "next_attempt_at", "TEXT")
             self._addObserverSessionColumnIfMissing(connection, "error_type", "TEXT")
+            self._addObserverEventColumnIfMissing(connection, "app_bundle_id", "TEXT")
+            self._addObserverEventColumnIfMissing(connection, "app_name", "TEXT")
             connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS approval_requests_idempotency_key
                    ON approval_requests(idempotency_key) WHERE idempotency_key IS NOT NULL"""
@@ -566,4 +570,19 @@ class SageDatabase:
         if columnName not in sessionColumns:
             connection.execute(
                 f"ALTER TABLE observer_sessions ADD COLUMN {columnName} {columnDefinition}"
+            )
+
+    def _addObserverEventColumnIfMissing(
+        self, connection: sqlite3.Connection, columnName: str, columnDefinition: str
+    ) -> None:
+        """Add native event provenance without discarding earlier browser observations."""
+        eventColumns = {
+            str(columnRow[1])
+            for columnRow in connection.execute(
+                "PRAGMA table_info(observer_events)"
+            ).fetchall()
+        }
+        if columnName not in eventColumns:
+            connection.execute(
+                f"ALTER TABLE observer_events ADD COLUMN {columnName} {columnDefinition}"
             )

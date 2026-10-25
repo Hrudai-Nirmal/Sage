@@ -40,12 +40,14 @@ function unloadModelAgent() {
 
 case "${requestedMode}" in
   NORMAL)
+    loadLaunchAgent com.sage.core
     loadLaunchAgent com.sage.telegram-dispatcher
     loadLaunchAgent com.sage.maintenance
     loadLaunchAgent com.sage.model-sage
     loadLaunchAgent com.sage.model-iris
     ;;
   ECO|SLEEP)
+    loadLaunchAgent com.sage.core
     # Telegram remains the remote wake/control plane while model memory is released.
     loadLaunchAgent com.sage.telegram-dispatcher
     loadLaunchAgent com.sage.maintenance

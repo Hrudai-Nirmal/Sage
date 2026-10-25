@@ -22,6 +22,25 @@ SUPPORTED_EVENT_TYPES = {
     "SEARCH",
     "VIDEO_PROGRESS",
 }
+SUPPORTED_DESKTOP_EVENT_TYPES = {"APPLICATION_ACTIVATED", "WINDOW_CHANGED"}
+EXCLUDED_DESKTOP_BUNDLE_MARKERS = (
+    "1password",
+    "authenticator",
+    "bitwarden",
+    "chrome",
+    "chromium",
+    "keychain",
+    "lastpass",
+    "microsoft.edgemac",
+    "mobilesms",
+    "onepassword",
+    "safari",
+    "signal",
+    "slack",
+    "systempreferences",
+    "telegram",
+    "whatsapp",
+)
 TRACKING_QUERY_PREFIXES = ("utm_",)
 TRACKING_QUERY_NAMES = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 SENSITIVE_HOST_MARKERS = (
@@ -158,13 +177,59 @@ class ObserverStateRepository:
             )
             return {"sessionId": sessionId, "status": "ACCEPTED"}
 
+    def recordDesktopEvent(self, desktopEvent: dict[str, object]) -> dict[str, str]:
+        """Normalize and store permitted native app metadata without screen content."""
+        normalizedEvent = self._normalizeDesktopEvent(desktopEvent)
+        with self.database.connectDatabase() as connection:
+            duplicateRow = connection.execute(
+                "SELECT session_id FROM observer_events WHERE id = ?",
+                (normalizedEvent["eventId"],),
+            ).fetchone()
+            if duplicateRow is not None:
+                return {"sessionId": str(duplicateRow[0]), "status": "DUPLICATE"}
+
+            sourceId = self._upsertDesktopSource(connection, normalizedEvent)
+            sessionId = self._getOrCreateSession(
+                connection, sourceId, normalizedEvent["occurredAt"]
+            )
+            receivedAt = datetime.now(UTC)
+            connection.execute(
+                """INSERT INTO observer_events (
+                       id, source_id, session_id, event_type, occurred_at, received_at,
+                       title, active_duration_seconds, app_bundle_id, app_name,
+                       content_hash, processing_status, raw_expires_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)""",
+                (
+                    normalizedEvent["eventId"],
+                    sourceId,
+                    sessionId,
+                    normalizedEvent["eventType"],
+                    normalizedEvent["occurredAt"].isoformat(),
+                    receivedAt.isoformat(),
+                    normalizedEvent.get("title"),
+                    normalizedEvent.get("activeDurationSeconds"),
+                    normalizedEvent["appBundleId"],
+                    normalizedEvent["appName"],
+                    normalizedEvent["contentHash"],
+                    (normalizedEvent["occurredAt"] + timedelta(days=30)).isoformat(),
+                ),
+            )
+            connection.execute(
+                """UPDATE observer_sessions
+                   SET last_event_at = ?, event_count = event_count + 1
+                   WHERE id = ?""",
+                (normalizedEvent["occurredAt"].isoformat(), sessionId),
+            )
+            return {"sessionId": sessionId, "status": "ACCEPTED"}
+
     def getEvent(self, eventId: str) -> dict[str, object]:
         """Return one normalized event for local diagnostics and evidence review."""
         if not eventId.strip():
             raise ValueError("eventId is required")
         with self.database.connectDatabase() as connection:
             row = connection.execute(
-                """SELECT id, session_id, url, title, search_query, processing_status
+                """SELECT id, session_id, url, title, search_query, processing_status,
+                          app_bundle_id, app_name
                    FROM observer_events WHERE id = ?""",
                 (eventId,),
             ).fetchone()
@@ -177,6 +242,8 @@ class ObserverStateRepository:
             "title": row[3],
             "searchQuery": row[4],
             "processingStatus": str(row[5]),
+            "appBundleId": row[6],
+            "appName": row[7],
         }
 
     def closeSession(self, sessionId: str, endedAt: datetime) -> None:
@@ -241,7 +308,8 @@ class ObserverStateRepository:
                 return None
             eventRows = connection.execute(
                 """SELECT id, event_type, occurred_at, url, title, page_text,
-                          search_query, active_duration_seconds, video_json
+                          search_query, active_duration_seconds, video_json,
+                          app_bundle_id, app_name
                    FROM observer_events WHERE session_id = ?
                    ORDER BY occurred_at ASC LIMIT 500""",
                 (sessionId,),
@@ -258,6 +326,8 @@ class ObserverStateRepository:
                     "title": eventRow[4],
                     "url": eventRow[3],
                     "video": json.loads(str(eventRow[8])) if eventRow[8] else None,
+                    "appBundleId": eventRow[9],
+                    "appName": eventRow[10],
                 }
                 for eventRow in eventRows
             ],
@@ -547,6 +617,49 @@ class ObserverStateRepository:
             normalizedUrl, domain = self._normalizeUrl(rawUrl)
             normalizedEvent["url"] = normalizedUrl
             normalizedEvent["domain"] = domain
+        hashPayload = json.dumps(
+            {
+                key: value.isoformat() if isinstance(value, datetime) else value
+                for key, value in normalizedEvent.items()
+            },
+            default=str,
+            sort_keys=True,
+        )
+        normalizedEvent["contentHash"] = hashlib.sha256(hashPayload.encode()).hexdigest()
+        return normalizedEvent
+
+    def _normalizeDesktopEvent(self, desktopEvent: dict[str, object]) -> dict[str, Any]:
+        """Validate native metadata and fail closed for browsers or sensitive apps."""
+        requiredFields = (
+            "appBundleId",
+            "appName",
+            "eventId",
+            "eventType",
+            "hostId",
+            "occurredAt",
+        )
+        for fieldName in requiredFields:
+            if not str(desktopEvent.get(fieldName, "")).strip():
+                raise ValueError(f"{fieldName} is required")
+        eventType = str(desktopEvent["eventType"]).upper()
+        if eventType not in SUPPORTED_DESKTOP_EVENT_TYPES:
+            raise ValueError("Unsupported desktop Observer event type")
+        appBundleId = str(desktopEvent["appBundleId"]).strip()
+        if any(marker in appBundleId.lower() for marker in EXCLUDED_DESKTOP_BUNDLE_MARKERS):
+            raise PermissionError("Desktop application is excluded by privacy policy")
+        occurredAt = datetime.fromisoformat(str(desktopEvent["occurredAt"]))
+        self._requireAwareTimestamp(occurredAt)
+        normalizedEvent: dict[str, Any] = {
+            "activeDurationSeconds": desktopEvent.get("activeDurationSeconds"),
+            "appBundleId": appBundleId,
+            "appName": self._redactText(str(desktopEvent["appName"]))[:500],
+            "eventId": str(desktopEvent["eventId"]),
+            "eventType": eventType,
+            "hostId": str(desktopEvent["hostId"]),
+            "occurredAt": occurredAt,
+            "title": self._redactText(str(desktopEvent.get("windowTitle", "")))[:2_000]
+            or None,
+        }
         hashPayload = json.dumps(
             {
                 key: value.isoformat() if isinstance(value, datetime) else value
@@ -930,6 +1043,31 @@ class ObserverStateRepository:
                 normalizedEvent["browserFamily"],
                 normalizedEvent["profileId"],
                 normalizedEvent["profileLabel"],
+                occurredAt,
+                occurredAt,
+            ),
+        )
+        return sourceId
+
+    def _upsertDesktopSource(
+        self, connection: sqlite3.Connection, normalizedEvent: dict[str, Any]
+    ) -> str:
+        """Resolve stable host provenance while keeping app identity as a source label."""
+        sourceSeed = f"desktop:{normalizedEvent['hostId']}"
+        sourceId = str(uuid5(NAMESPACE_URL, sourceSeed))
+        occurredAt = normalizedEvent["occurredAt"].isoformat()
+        connection.execute(
+            """INSERT INTO observer_sources (
+                   id, source_kind, browser_family, profile_id, profile_label,
+                   first_seen_at, last_seen_at
+               ) VALUES (?, 'DESKTOP', NULL, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   profile_label = excluded.profile_label,
+                   last_seen_at = excluded.last_seen_at""",
+            (
+                sourceId,
+                normalizedEvent["hostId"],
+                normalizedEvent["appName"],
                 occurredAt,
                 occurredAt,
             ),

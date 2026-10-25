@@ -30,6 +30,7 @@ def createConfiguredApp() -> FastAPI:
             "downloads": _getRequiredEnvironmentPath("SAGE_DOWNLOADS_IMPORT_ROOT"),
         },
         operatorToken=_getRequiredEnvironmentValue("SAGE_OPERATOR_TOKEN"),
+        nativeObserverToken=_getRequiredEnvironmentValue("SAGE_NATIVE_OBSERVER_TOKEN"),
         observerAllowedOrigins=_getRequiredObserverOrigins(),
         observerIngressToken=_getRequiredEnvironmentValue("SAGE_OBSERVER_INGRESS_TOKEN"),
         proposalToken=_getRequiredEnvironmentValue("SAGE_PROPOSAL_TOKEN"),

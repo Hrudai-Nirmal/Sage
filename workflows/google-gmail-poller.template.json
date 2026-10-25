@@ -83,7 +83,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://sage-core:8787/v1/google/calendar/events",
+        "url": "http://host.docker.internal:8787/v1/google/calendar/events",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -515,7 +515,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://sage-core:8787/v1/google/gmail/messages",
+        "url": "http://host.docker.internal:8787/v1/google/gmail/messages",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

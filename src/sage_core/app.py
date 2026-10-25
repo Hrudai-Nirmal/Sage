@@ -484,6 +484,31 @@ class ObserverBrowserEventPayload(BaseModel):
         return self
 
 
+class ObserverDesktopEventPayload(BaseModel):
+    """Validate metadata-only native activity before Core privacy policy runs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    activeDurationSeconds: int | None = Field(default=None, ge=0, le=86_400)
+    appBundleId: str = Field(min_length=1, max_length=500)
+    appName: str = Field(min_length=1, max_length=500)
+    eventId: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    eventType: Literal["APPLICATION_ACTIVATED", "WINDOW_CHANGED"]
+    hostId: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.-]+$")
+    occurredAt: str = Field(min_length=1, max_length=100)
+    windowTitle: str | None = Field(default=None, max_length=2_000)
+
+    @model_validator(mode="after")
+    def validateOccurredAt(self) -> "ObserverDesktopEventPayload":
+        """Require an unambiguous timestamp before assigning a native session."""
+        from datetime import datetime
+
+        occurredAt = datetime.fromisoformat(self.occurredAt)
+        if occurredAt.tzinfo is None:
+            raise ValueError("Observer occurredAt must include a timezone")
+        return self
+
+
 class ObserverMonitoringPayload(BaseModel):
     """Validate explicit local Observer controls independently from Sage mode."""
 
@@ -512,6 +537,7 @@ def createApp(
     googleIngressToken: str = "",
     importRoots: dict[str, Path] | None = None,
     operatorToken: str = "",
+    nativeObserverToken: str = "",
     observerAllowedOrigins: set[str] | None = None,
     observerIngressToken: str = "",
     proposalToken: str = "",
@@ -621,6 +647,34 @@ def createApp(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
             ) from error
+        if receipt["status"] == "DUPLICATE":
+            response.status_code = status.HTTP_200_OK
+        return receipt
+
+    @app.post("/v1/observer/desktop-events", status_code=status.HTTP_201_CREATED)
+    def acceptDesktopObserverEvent(
+        observerEvent: ObserverDesktopEventPayload,
+        response: Response,
+        sageNativeObserverToken: str = Header(alias="X-Sage-Native-Observer-Token"),
+    ) -> dict[str, str]:
+        """Accept metadata-only native events through an independent credential."""
+        _validateToken(sageNativeObserverToken, nativeObserverToken)
+        monitoringStatus = observerStateRepository.getMonitoringStatus(
+            systemStateRepository.getMode()
+        )
+        if not monitoringStatus["isCollecting"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Observer collection is paused by user or runtime state",
+            )
+        try:
+            receipt = observerStateRepository.recordDesktopEvent(
+                observerEvent.model_dump(exclude_none=True)
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
         if receipt["status"] == "DUPLICATE":
             response.status_code = status.HTTP_200_OK
         return receipt

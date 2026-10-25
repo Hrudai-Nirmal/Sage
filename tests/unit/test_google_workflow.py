@@ -53,7 +53,7 @@ def testGmailPollerOnlyIndexesAndNeverChangesRemoteMail():
     assert all(operation not in serializedWorkflow for operation in forbiddenOperations)
     forwardNode = next(node for node in workflow["nodes"] if node["name"] == "Index in Sage Core")
     assert forwardNode["parameters"]["method"] == "POST"
-    assert forwardNode["parameters"]["url"] == "http://sage-core:8787/v1/google/gmail/messages"
+    assert forwardNode["parameters"]["url"] == "http://host.docker.internal:8787/v1/google/gmail/messages"
     assert "SAGE_GOOGLE_INGRESS_TOKEN" in json.dumps(forwardNode)
 
 
@@ -129,7 +129,10 @@ def testGoogleSecretsAreSharedOnlyWithCoreAndN8n():
     exampleEnvironment = (projectRoot / ".env.example").read_text()
     bootstrapText = (projectRoot / "scripts" / "bootstrap-runtime.sh").read_text()
 
-    assert composeText.count("- ${SAGE_GOOGLE_ENV_FILE:") == 2
+    assert composeText.count("- ${SAGE_GOOGLE_ENV_FILE:") == 1
+    assert '"${sageDataRoot}/secrets/google.env"' in (
+        projectRoot / "scripts" / "run-core.sh"
+    ).read_text()
     assert "SAGE_GOOGLE_ENV_FILE=" in exampleEnvironment
     assert "SAGE_GOOGLE_INGRESS_TOKEN" in bootstrapText
     assert "google.env" in bootstrapText

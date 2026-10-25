@@ -40,6 +40,7 @@ if [[ ! -f "${secretRoot}/core.env" ]]; then
   {
     print "SAGE_APPROVAL_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_OPERATOR_TOKEN=$(openssl rand -hex 32)"
+    print "SAGE_NATIVE_OBSERVER_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_OBSERVER_INGRESS_TOKEN=$(openssl rand -hex 32)"
     print "SAGE_OBSERVER_ALLOWED_ORIGINS=chrome-extension://ehkgdljmlcdijndcbcjgcpphkogmjbod"
     print "SAGE_PROPOSAL_TOKEN=$(openssl rand -hex 32)"
@@ -53,6 +54,10 @@ fi
 
 if ! grep -q '^SAGE_OBSERVER_INGRESS_TOKEN=' "${secretRoot}/core.env"; then
   print "SAGE_OBSERVER_INGRESS_TOKEN=$(openssl rand -hex 32)" >> "${secretRoot}/core.env"
+fi
+
+if ! grep -q '^SAGE_NATIVE_OBSERVER_TOKEN=' "${secretRoot}/core.env"; then
+  print "SAGE_NATIVE_OBSERVER_TOKEN=$(openssl rand -hex 32)" >> "${secretRoot}/core.env"
 fi
 
 if ! grep -q '^SAGE_OBSERVER_ALLOWED_ORIGINS=' "${secretRoot}/core.env"; then

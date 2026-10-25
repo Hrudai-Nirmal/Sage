@@ -12,9 +12,9 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - A code-owned capability broker injects Sage's complete configured ability and authority manifest into every model turn. It permits automatic inference of one read-only source, asks when multiple sources are named, retries only technical failures on retry-safe operations at most three times, and blocks model claims that configured integrations do not exist.
 - Confirmed personal context is stored in a typed, provenance-aware SQLite registry with immutable revisions. Private generated Markdown views under `SageData/context` make ordinary context inspectable; sensitive values remain only in SQLite and the Markdown registry exposes metadata alone. Relevant confirmed records are injected into every Sage model turn; conversation guesses are never silently promoted to memory.
 - Telegram images and image/PDF documents are bounded at 20 MB, inspected by Iris, synthesized by Sage, and removed from temporary storage after each request.
-- Docker Compose defines local-only Sage Core and n8n services. Native launchd templates own model services.
+- Native launchd owns Core, the Telegram dispatcher, the macOS app, and model services. Docker Compose owns only n8n; this keeps every SQLite writer in one macOS locking domain.
 - The managed data root is `/Users/hrudainirmal/SageData`; all runtime state and secrets are excluded from Git.
-- Sage Observer now has a tested browser-to-memory vertical slice: an unpacked Chromium MV3 collector sends authenticated loopback events, Core creates durable activity sessions, the existing Iris instance produces schema-bound analysis, and Sage can search evidence-backed observed/inferred memories with provenance counts.
+- Sage Observer has tested browser and native desktop metadata paths: an unpacked Chromium MV3 collector and the macOS app send independently authenticated events, Core creates durable activity sessions, the existing Iris instance produces schema-bound analysis, and Sage can search evidence-backed observed/inferred memories with provenance counts.
 
 Telegram routing is configured privately for the chosen forum group. The active Telegram poller is ingress-only; one native dispatcher owns all replies, scheduled deliveries, Calendar reminders, email triage, Drive jobs, and model calls. Gmail is checked every five minutes, Calendar every 30 minutes, and Drive only on demand.
 
@@ -28,23 +28,24 @@ SAGE_DATA_ROOT=/Users/hrudainirmal/SageData scripts/bootstrap-runtime.sh
 
 It creates the managed structure, including `context`, `skills`, `tools`, `documents`, `archives`, `research`, `observer/events`, `observer/exports`, `observer/temp`, `temp`, `backups`, `logs`, and private service credentials. Downloads is the sole configured external source and imports are copy-only.
 
-Start Docker Desktop, then validate and launch the app services:
+Install or refresh the native Core/model/worker services, then start the n8n container:
 
 ```zsh
+scripts/install-launchd.sh
 docker compose config
-docker compose up --build -d
+docker compose up -d n8n
 ```
 
 Core listens only on `127.0.0.1:8787`, and n8n listens only on `127.0.0.1:5678`.
 Open the local operator dashboard at [http://127.0.0.1:8787/operator](http://127.0.0.1:8787/operator) to inspect modes, approvals, tasks, cases, documents, research, schedules, and audit activity. Conversation remains in Telegram.
 
-Install native model services after Docker is available and the machine is intended to run in normal mode:
+Install the native menu-bar/window app:
 
 ```zsh
-scripts/install-launchd.sh
+scripts/install-macos-app.sh
 ```
 
-This registers separate user launch agents for Sage on port `18080` and Iris on port `18081`. Both bind only to loopback and require the private model-server token.
+The app opens at login, shows runtime and privacy state, controls Sage modes and monitoring, and collects permitted foreground-app metadata. It uses Accessibility only for window titles. Browser windows, passwords/authenticators, messaging/mail apps, System Settings, locked screens, and Secure Input are excluded. A bounded disk queue survives Core restarts. Battery or Low Power Mode forces Sage to Sleep immediately.
 
 ## Browser Observer
 
@@ -72,7 +73,7 @@ Observer controls are exact Telegram commands so ordinary conversation cannot si
 
 The off state persists across restarts. Normal and Eco permit collection; Sleep and Shutdown are enforced as no-collection states by Core even if an extension is stale or misbehaving.
 
-Architecture, data contracts, retention, and trust boundaries are documented in `docs/observer-architecture.md` and `docs/observer-threat-model.md`. The native SwiftUI observer, battery/Low Power Mode enforcement, memory management UI, and screenshot/OCR path are later vertical slices and are not claimed by this browser slice.
+Architecture, data contracts, retention, and trust boundaries are documented in `docs/observer-architecture.md` and `docs/observer-threat-model.md`. Screenshot/OCR/vision capture, semantic embeddings, and memory inspection/correction UI remain later slices and are not claimed by the current metadata observer.
 
 The same installer registers a daily 03:15 IST maintenance agent. It removes only temporary files older than seven days and resets the in-memory cache of either active model server. To stop Sage cleanly without deleting its personal state:
 

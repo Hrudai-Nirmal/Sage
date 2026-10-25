@@ -13,7 +13,9 @@ fi
 
 mkdir -p "${launchAgentRoot}" "${sageDataRoot}/logs"
 
-for agentName in com.sage.model-sage com.sage.model-iris com.sage.telegram-dispatcher com.sage.maintenance; do
+"${sageDataRoot}/runtime/sage-core/bin/python" -m pip install --quiet "${sageProjectRoot}"
+
+for agentName in com.sage.core com.sage.model-sage com.sage.model-iris com.sage.telegram-dispatcher com.sage.maintenance; do
   templatePath="${sageProjectRoot}/launchd/${agentName}.plist.template"
   destinationPath="${launchAgentRoot}/${agentName}.plist"
   renderedTemplate="$(sed -e "s|__SAGE_PROJECT_ROOT__|${sageProjectRoot}|g" -e "s|__SAGE_DATA_ROOT__|${sageDataRoot}|g" "${templatePath}")"

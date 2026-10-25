@@ -4,6 +4,7 @@ set -euo pipefail
 
 sageProjectRoot="${SAGE_PROJECT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 sageDataRoot="${SAGE_DATA_ROOT:-/Users/hrudainirmal/SageData}"
+appExecutable="${HOME}/Applications/Sage.app/Contents/MacOS/Sage"
 
 function stopMatchingModelServer() {
   local modelPort="$1"
@@ -29,9 +30,22 @@ function stopMatchingModelServer() {
   done
 }
 
-for launchAgentName in com.sage.model-sage com.sage.model-iris com.sage.telegram-dispatcher com.sage.maintenance; do
+for launchAgentName in com.sage.model-sage com.sage.model-iris com.sage.telegram-dispatcher com.sage.maintenance com.sage.core com.sage.desktop-app; do
   launchctl unload "${HOME}/Library/LaunchAgents/${launchAgentName}.plist" 2>/dev/null || true
 done
+
+if pgrep -f "^${appExecutable}$" >/dev/null; then
+  pkill -TERM -f "^${appExecutable}$"
+  for shutdownAttempt in {1..20}; do
+    if ! pgrep -f "^${appExecutable}$" >/dev/null; then
+      break
+    fi
+    sleep 0.25
+  done
+  if pgrep -f "^${appExecutable}$" >/dev/null; then
+    pkill -KILL -f "^${appExecutable}$"
+  fi
+fi
 
 stopMatchingModelServer "${SAGE_SAGE_MODEL_PORT:-18080}" "${sageDataRoot}/models/qwen3.5-9b-6bit"
 stopMatchingModelServer "${SAGE_IRIS_MODEL_PORT:-18081}" "${sageDataRoot}/models/qwen3-vl-2b-instruct-4bit"

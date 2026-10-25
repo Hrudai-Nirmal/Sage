@@ -9,6 +9,8 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+macos/Sage/.build/
+macos/Sage/.swiftpm/
 
 # Never accept a local data-root shortcut or model artifacts into the repository.
 SageData/

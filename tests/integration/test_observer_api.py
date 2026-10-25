@@ -21,6 +21,20 @@ def buildIngressEvent() -> dict[str, object]:
     }
 
 
+def buildDesktopIngressEvent() -> dict[str, object]:
+    """Build one valid native application event without captured screen content."""
+    return {
+        "activeDurationSeconds": 30,
+        "appBundleId": "com.microsoft.VSCode",
+        "appName": "Visual Studio Code",
+        "eventId": "desktop-event-1",
+        "eventType": "WINDOW_CHANGED",
+        "hostId": "hrudais-macbook-pro",
+        "occurredAt": "2026-10-25T09:00:00+05:30",
+        "windowTitle": "observer-state.py — Sage",
+    }
+
+
 def testAuthenticatesOriginAndDeduplicatesExtensionEvents(tmp_path):
     """An ingress-only token and exact extension Origin protect the write endpoint."""
     allowedOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
@@ -202,3 +216,40 @@ def testExpiredObserverPauseResumesAutomatically(tmp_path):
 
     assert paused.json()["monitoringState"] == "ON"
     assert current.json()["isCollecting"] is True
+
+
+def testDesktopIngressUsesIndependentTokenAndRuntimeGate(tmp_path):
+    """The native observer cannot reuse browser or operator credentials for collection."""
+    app = createApp(
+        databasePath=tmp_path / "sage.db",
+        nativeObserverToken="native-observer-token",
+        observerIngressToken="browser-observer-token",
+        operatorToken="operator-token",
+    )
+
+    with TestClient(app) as client:
+        wrongToken = client.post(
+            "/v1/observer/desktop-events",
+            json=buildDesktopIngressEvent(),
+            headers={"X-Sage-Native-Observer-Token": "browser-observer-token"},
+        )
+        accepted = client.post(
+            "/v1/observer/desktop-events",
+            json=buildDesktopIngressEvent(),
+            headers={"X-Sage-Native-Observer-Token": "native-observer-token"},
+        )
+        client.patch(
+            "/v1/system/mode",
+            json={"mode": "SLEEP"},
+            headers={"X-Sage-Operator-Token": "operator-token"},
+        )
+        blockedWhileSleeping = client.post(
+            "/v1/observer/desktop-events",
+            json=buildDesktopIngressEvent() | {"eventId": "desktop-event-2"},
+            headers={"X-Sage-Native-Observer-Token": "native-observer-token"},
+        )
+
+    assert wrongToken.status_code == 403
+    assert accepted.status_code == 201
+    assert accepted.json()["status"] == "ACCEPTED"
+    assert blockedWhileSleeping.status_code == 409

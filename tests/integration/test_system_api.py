@@ -917,6 +917,7 @@ def testBuildsConfiguredAppFromPrivateRuntimeEnvironment(tmp_path, monkeypatch):
         "chrome-extension://ehkgdljmlcdijndcbcjgcpphkogmjbod",
     )
     monkeypatch.setenv("SAGE_OBSERVER_INGRESS_TOKEN", "observer-token")
+    monkeypatch.setenv("SAGE_NATIVE_OBSERVER_TOKEN", "native-observer-token")
     monkeypatch.setenv("SAGE_PROPOSAL_TOKEN", "proposal-token")
     monkeypatch.setenv("SAGE_RESEARCH_TOKEN", "research-token")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-token")
@@ -1370,7 +1371,13 @@ def testShutsDownSageStateWithoutDeletingDurableData(tmp_path):
     repositoryRoot = Path(__file__).parents[2]
     fakeBinRoot = tmp_path / "bin"
     fakeBinRoot.mkdir()
-    for commandName, exitCode in (("launchctl", 0), ("lsof", 1), ("docker", 1)):
+    for commandName, exitCode in (
+        ("launchctl", 0),
+        ("lsof", 1),
+        ("docker", 1),
+        ("pgrep", 1),
+        ("pkill", 0),
+    ):
         fakeCommand = fakeBinRoot / commandName
         fakeCommand.write_text(f"#!/bin/zsh\nexit {exitCode}\n")
         fakeCommand.chmod(0o755)

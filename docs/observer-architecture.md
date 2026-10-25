@@ -12,7 +12,7 @@ browser-extension/
 src/sage_core/
   observer/            contracts, policy, session state, memory state, processing
 macos/
-  Sage/                SwiftUI application and native observer (later slice)
+  Sage/                SwiftUI operator app and native metadata observer
 docs/
   observer-architecture.md
   observer-threat-model.md
@@ -22,6 +22,8 @@ tests/
 ```
 
 The existing FastAPI process remains the one durable state owner. The existing Iris model remains the sole background classifier. No additional model or agent process is introduced.
+
+Core runs as a native LaunchAgent so it shares one macOS SQLite locking domain with the Telegram dispatcher. n8n remains in Docker and reaches the authenticated host boundary through Docker Desktop's host gateway; it never mounts or writes the database.
 
 ## Data flow
 
@@ -63,6 +65,14 @@ The Manifest V3 extension posts JSON to an HTTP loopback endpoint. Requests requ
 - Core-side URL normalization, denylist enforcement, and redaction.
 
 The extension is loaded independently in each Chromium profile. `browserFamily`, `profileId`, and an optional user-editable profile label are provenance only. They never authorize browser automation or access to Google service credentials.
+
+## Native desktop communication
+
+The native app observes foreground application switches with `NSWorkspace` notifications and accessible window-title changes with AX notifications. It does not poll the screen. Browser, password/authentication, messaging, mail, and system-settings bundle identifiers are rejected locally before title access and rejected again by Core.
+
+Permitted events contain a UUID, timezone-aware timestamp, host identity, event type, app bundle ID, app name, optional redacted window title, and optional active duration. App identity is stored on each event so later source-label changes cannot corrupt provenance. A separate write-only native ingress token authenticates this contract.
+
+The app queues at most 1,000 events in a mode-`0600` disk FIFO and removes an item only after Core acknowledges it. Core or model downtime therefore does not block desktop use or discard permitted metadata. Battery, Low Power Mode, lock, Secure Input, Sleep, Shutdown, or Observer Off stop collection immediately.
 
 ## Event contract
 
@@ -117,7 +127,7 @@ The queue is bounded to 50,000 events or 500 MB. Overflow removes the oldest low
 
 Retrieval supports keyword/FTS queries and filters for time, entity, activity, memory kind, and trust level. Conversation injection is query-relevant and bounded to eight inferred plus four episodic memories. Results always label trust, date, confidence where applicable, and evidence provenance.
 
-## Initial vertical slice
+## Implemented vertical slices
 
 The first shippable path uses synthetic extension events before real browsing:
 
@@ -129,4 +139,4 @@ The first shippable path uses synthetic extension events before real browsing:
 6. retrieve it through FTS with both evidence references;
 7. verify excluded content, replay, deletion, and model failure behavior.
 
-The native observer and SwiftUI application build on the same contracts in the following vertical slices.
+The browser path and native metadata path are implemented. The native path includes the menu-bar/window controls, power policy, app/title observation, queue recovery, independent authentication, and per-event app provenance. Screenshot capture, Apple Vision OCR, selective Iris vision analysis, semantic embeddings, and the memory inspection/correction UI remain future slices.

@@ -33,6 +33,27 @@ def buildBrowserEvent(
     }
 
 
+def buildDesktopEvent(
+    eventId: str,
+    occurredAt: datetime,
+    *,
+    appBundleId: str = "com.microsoft.VSCode",
+    appName: str = "Visual Studio Code",
+    windowTitle: str = "observer-state.py — Sage",
+) -> dict[str, object]:
+    """Build one permitted native app observation for repository tests."""
+    return {
+        "activeDurationSeconds": 30,
+        "appBundleId": appBundleId,
+        "appName": appName,
+        "eventId": eventId,
+        "eventType": "WINDOW_CHANGED",
+        "hostId": "hrudais-macbook-pro",
+        "occurredAt": occurredAt.isoformat(),
+        "windowTitle": windowTitle,
+    }
+
+
 def testRecordsRedactedDeduplicatedEventInOpenSession(tmp_path):
     """Ingress persistence strips tracking and secrets before durable storage."""
     repository = ObserverStateRepository(SageDatabase(tmp_path / "sage.db"))
@@ -63,6 +84,68 @@ def testRejectsExcludedAndNonWebLocations(tmp_path):
     with pytest.raises(ValueError, match="HTTP"):
         repository.recordBrowserEvent(
             buildBrowserEvent("event-internal", occurredAt, url="chrome://settings")
+        )
+
+
+def testRecordsRedactedDeduplicatedDesktopEvent(tmp_path):
+    """Native metadata shares session storage without pretending to be browser activity."""
+    database = SageDatabase(tmp_path / "sage.db")
+    repository = ObserverStateRepository(database)
+    occurredAt = datetime(2026, 10, 25, 8, 0, tzinfo=UTC)
+    event = buildDesktopEvent(
+        "desktop-event-1",
+        occurredAt,
+        windowTitle="Sage password=visible-secret",
+    )
+
+    firstReceipt = repository.recordDesktopEvent(event)
+    duplicateReceipt = repository.recordDesktopEvent(event)
+    storedEvent = repository.getEvent("desktop-event-1")
+    with database.connectDatabase() as connection:
+        sourceRow = connection.execute(
+            """SELECT source_kind, browser_family, profile_id, profile_label
+               FROM observer_sources WHERE id = (
+                   SELECT source_id FROM observer_events WHERE id = ?
+               )""",
+            ("desktop-event-1",),
+        ).fetchone()
+
+    assert firstReceipt["status"] == "ACCEPTED"
+    assert duplicateReceipt == {
+        "sessionId": firstReceipt["sessionId"],
+        "status": "DUPLICATE",
+    }
+    assert storedEvent["title"] == "Sage password=[REDACTED]"
+    assert storedEvent["appBundleId"] == "com.microsoft.VSCode"
+    assert storedEvent["appName"] == "Visual Studio Code"
+    assert sourceRow == ("DESKTOP", None, "hrudais-macbook-pro", "Visual Studio Code")
+
+
+@pytest.mark.parametrize(
+    ("appBundleId", "appName"),
+    [
+        ("com.google.Chrome", "Google Chrome"),
+        ("com.apple.keychainaccess", "Keychain Access"),
+        ("com.1password.1password", "1Password"),
+        ("com.apple.MobileSMS", "Messages"),
+        ("com.apple.systempreferences", "System Settings"),
+    ],
+)
+def testRejectsBrowserAndSensitiveDesktopApplications(
+    tmp_path, appBundleId, appName
+):
+    """Desktop collection fails closed where another collector or privacy denylist applies."""
+    repository = ObserverStateRepository(SageDatabase(tmp_path / "sage.db"))
+    occurredAt = datetime(2026, 10, 25, 8, 0, tzinfo=UTC)
+
+    with pytest.raises(PermissionError, match="excluded"):
+        repository.recordDesktopEvent(
+            buildDesktopEvent(
+                f"event-{appName.lower().replace(' ', '-')}",
+                occurredAt,
+                appBundleId=appBundleId,
+                appName=appName,
+            )
         )
 
 

@@ -7,7 +7,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 ## Decisions
 
 - Sage Core uses FastAPI and SQLite; n8n orchestrates deterministic external workflows.
-- Sage and Iris run as separate native `mlx-vlm` launchd services; application services run through Docker Compose.
+- Sage Core, the Telegram dispatcher, Sage, and Iris run as native launchd services. Docker Compose owns only n8n, which reaches Core through Docker Desktop's host gateway.
 - User-authorized approvals are server-validated, single-use Telegram button actions. Models cannot approve their own work.
 - Telegram ingress is restricted to the configured numeric user, one forum group, and the Main, Scheduled Reports, and Notifications topics.
 - Files are copied into `/Users/hrudainirmal/SageData` and never altered at their external source.
@@ -16,7 +16,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 ## Gotchas
 
 - Creating or archiving a task, case, or schedule requires an explicit approval record. Explicit reversible edits, status transitions, case notes, and case milestones do not; skill and workflow creation remain approval-gated.
-- Docker containers must not receive broad host filesystem mounts. Sage Core owns controlled import access.
+- Docker containers must not receive broad host filesystem mounts. Sage Core owns controlled import access. No Docker process may write the SQLite database because host and Docker filesystem locking domains are not safe concurrent SQLite writers.
 - Core uses independent proposal, approval, and operator credentials so a model-visible proposal channel cannot confirm its own actions.
 - Runtime modes are `NORMAL`, `ECO`, `SLEEP`, and `SHUTDOWN`; shutdown stops Sage only and never powers off macOS.
 - Model server API keys must be passed through `MLX_VLM_SERVER_API_KEY`, never as command-line arguments, because command lines are visible in process listings.
@@ -85,5 +85,7 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Observer memory has three trust layers: direct `OBSERVED` activity, evidence-backed `INFERRED` interpretation, and existing confirmed `context_records`. Two independent sessions are required for an ordinary semantic inference; uncertain classification may create an explicitly uncertain memory capped at 0.35 confidence.
 - The Chromium collector has stable ID `ehkgdljmlcdijndcbcjgcpphkogmjbod`, disallows incognito, debounces active pages for five seconds, bounds cleaned text to 12,000 characters, and reports YouTube evidence only after 50% playback. Entertainment never strengthens semantic interests.
 - Observed content never enters the tool authority path. Iris receives it as untrusted data and can return only the closed analysis schema; Core rejects unknown fields, invalid provenance, sensitive-trait inference, purchase-intent inference, and tool/action content.
-- The first Observer vertical slice is browser-only. The SwiftUI app, macOS Accessibility/window observation, screenshots/OCR, battery and Low Power Mode enforcement, menu-bar controls, queue-size eviction, and retention jobs remain subsequent tested slices.
+- The native Observer slice adds a single-instance SwiftUI menu-bar/window app, event-driven foreground-app and Accessibility title observation, a 1,000-event disk FIFO, app provenance, local controls, and deterministic battery/Low Power Mode sleep. Screenshot/OCR/vision capture and memory management UI remain later slices.
+- Core runs natively so every SQLite writer shares macOS locking. n8n remains containerized and calls the host boundary through `host.docker.internal`; the `sage-core` host alias preserves already-deployed workflow compatibility.
+- Native Core environment files are parsed literally by Python rather than sourced by a shell, preserving JSON and tokens containing equals signs.
 - Observer on/off/pause intent is persisted independently from Sage's runtime mode. Core permits collection only when intent is ON and mode is Normal or Eco; Telegram exposes only exact `/observer-*` controls, including bounded and manual pause.
