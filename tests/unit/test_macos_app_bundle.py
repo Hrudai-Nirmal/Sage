@@ -81,6 +81,22 @@ def testRuntimeModeControlKeepsSleepAndShutdownAvailableOnBattery():
     assert ".disabled(appState.powerState.isOnBattery" not in dashboardSource
 
 
+def testDashboardSectionSelectionCannotEnterEmptyState():
+    """Section changes must avoid the split-view rendering path that blanked the window."""
+    dashboardSource = (
+        PROJECT_ROOT / "macos/Sage/Sources/SageApp/sage-dashboard-view.swift"
+    ).read_text()
+
+    assert "@State private var selection: DashboardSection = .overview" in dashboardSource
+    assert "Button {\n                        selection = section" in dashboardSource
+    assert "List(DashboardSection.allCases, selection:" not in dashboardSource
+    assert "NavigationLink(value: section)" not in dashboardSource
+    assert "HSplitView {" in dashboardSource
+    assert "NavigationSplitView" not in dashboardSource
+    assert "switch selection {" in dashboardSource
+    assert "selection ??" not in dashboardSource
+
+
 def testSageShutdownStopsTheLaunchedDesktopProcess():
     """Unloading the one-shot login agent must not leave its already-launched app alive."""
     shutdownScript = (PROJECT_ROOT / "scripts/shutdown-sage.sh").read_text()

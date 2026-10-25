@@ -13,7 +13,8 @@ Provide one local macOS operator surface and an event-driven desktop metadata co
 - Native events use a dedicated Core ingress token. Runtime controls use the operator token. The unsigned local app reads only those two values from the existing mode-`0600` Core environment file; it never sources that file through a shell or reads approval credentials.
 - A disk-backed FIFO retains at most 1,000 permitted events through Core outages. Events are removed only after a successful Core acknowledgement.
 - Battery power or Low Power Mode immediately forces Sleep and stops collection. The prior Normal or Eco mode is restored only when that sleep was power-forced, external power returns, Low Power Mode is off, and the screen is unlocked.
-- The visual reference is standard macOS utility software: system typography, semantic colors, SF Symbols, a navigation split view, and native controls. Decorative card grids and custom chrome are intentionally avoided.
+- The visual reference is standard macOS utility software: system typography, semantic colors, SF Symbols, a native split pane, and native controls. Decorative card grids and custom chrome are intentionally avoided.
+- Dashboard navigation keeps one non-optional section selected. The app uses `HSplitView` with explicit sidebar buttons because `NavigationSplitView` dropped its rendered layer on section changes on this macOS build even though its accessibility tree remained populated.
 
 ## Gotchas
 

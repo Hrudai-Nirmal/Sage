@@ -26,34 +26,48 @@ private enum DashboardSection: String, CaseIterable, Identifiable {
 
 struct SageDashboardView: View {
     @ObservedObject var appState: AppState
-    @State private var selection: DashboardSection? = .overview
+    @State private var selection: DashboardSection = .overview
 
     var body: some View {
-        NavigationSplitView {
-            List(DashboardSection.allCases, selection: $selection) { section in
-                Label(section.rawValue, systemImage: section.symbolName)
-                    .tag(section)
+        HSplitView {
+            List {
+                ForEach(DashboardSection.allCases) { section in
+                    Button {
+                        selection = section
+                    } label: {
+                        Label(section.rawValue, systemImage: section.symbolName)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        selection == section
+                            ? Color.accentColor.opacity(0.18)
+                            : Color.clear
+                    )
+                    .accessibilityAddTraits(selection == section ? .isSelected : [])
+                }
             }
-            .navigationTitle("Sage")
-            .navigationSplitViewColumnWidth(min: 180, ideal: 210)
-        } detail: {
+            .listStyle(.sidebar)
+            .frame(minWidth: 180, idealWidth: 210, maxWidth: 260)
+
             detailView
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .toolbar {
-                    ToolbarItem {
-                        Button("Refresh", systemImage: "arrow.clockwise") {
-                            appState.refresh()
-                        }
-                        .help("Refresh Sage Core and Observer status")
-                    }
+        }
+        .toolbar {
+            ToolbarItem {
+                Button("Refresh", systemImage: "arrow.clockwise") {
+                    appState.refresh()
                 }
+                .help("Refresh Sage Core and Observer status")
+            }
         }
         .frame(minWidth: 820, minHeight: 560)
     }
 
     @ViewBuilder
     private var detailView: some View {
-        switch selection ?? .overview {
+        switch selection {
         case .overview:
             OverviewView(appState: appState)
         case .activity:
