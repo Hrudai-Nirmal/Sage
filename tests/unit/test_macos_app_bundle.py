@@ -81,20 +81,22 @@ def testRuntimeModeControlKeepsSleepAndShutdownAvailableOnBattery():
     assert ".disabled(appState.powerState.isOnBattery" not in dashboardSource
 
 
-def testDashboardSectionSelectionCannotEnterEmptyState():
-    """Section changes must avoid the split-view rendering path that blanked the window."""
+def testDashboardSectionsUseStableFullPageContainers():
+    """Every switched detail keeps a concrete page root on macOS 26."""
     dashboardSource = (
         PROJECT_ROOT / "macos/Sage/Sources/SageApp/sage-dashboard-view.swift"
     ).read_text()
+    activitySource = dashboardSource.split(
+        "private struct ActivityView", maxsplit=1
+    )[1].split("private struct PrivacyView", maxsplit=1)[0]
+    runtimeSource = dashboardSource.split(
+        "private struct RuntimeView", maxsplit=1
+    )[1].split("private struct StatusRows", maxsplit=1)[0]
 
-    assert "@State private var selection: DashboardSection = .overview" in dashboardSource
-    assert "Button {\n                        selection = section" in dashboardSource
-    assert "List(DashboardSection.allCases, selection:" not in dashboardSource
-    assert "NavigationLink(value: section)" not in dashboardSource
-    assert "HSplitView {" in dashboardSource
-    assert "NavigationSplitView" not in dashboardSource
-    assert "switch selection {" in dashboardSource
-    assert "selection ??" not in dashboardSource
+    assert "ScrollView {" in activitySource
+    assert "Spacer()" not in activitySource
+    assert "ScrollView {" in runtimeSource
+    assert "Spacer()" not in runtimeSource
 
 
 def testSageShutdownStopsTheLaunchedDesktopProcess():

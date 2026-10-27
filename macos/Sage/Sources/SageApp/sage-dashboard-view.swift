@@ -26,48 +26,34 @@ private enum DashboardSection: String, CaseIterable, Identifiable {
 
 struct SageDashboardView: View {
     @ObservedObject var appState: AppState
-    @State private var selection: DashboardSection = .overview
+    @State private var selection: DashboardSection? = .overview
 
     var body: some View {
-        HSplitView {
-            List {
-                ForEach(DashboardSection.allCases) { section in
-                    Button {
-                        selection = section
-                    } label: {
-                        Label(section.rawValue, systemImage: section.symbolName)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(
-                        selection == section
-                            ? Color.accentColor.opacity(0.18)
-                            : Color.clear
-                    )
-                    .accessibilityAddTraits(selection == section ? .isSelected : [])
-                }
+        NavigationSplitView {
+            List(DashboardSection.allCases, selection: $selection) { section in
+                Label(section.rawValue, systemImage: section.symbolName)
+                    .tag(section)
             }
-            .listStyle(.sidebar)
-            .frame(minWidth: 180, idealWidth: 210, maxWidth: 260)
-
+            .navigationTitle("Sage")
+            .navigationSplitViewColumnWidth(min: 180, ideal: 210)
+        } detail: {
             detailView
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .toolbar {
-            ToolbarItem {
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    appState.refresh()
+                .toolbar {
+                    ToolbarItem {
+                        Button("Refresh", systemImage: "arrow.clockwise") {
+                            appState.refresh()
+                        }
+                        .help("Refresh Sage Core and Observer status")
+                    }
                 }
-                .help("Refresh Sage Core and Observer status")
-            }
         }
         .frame(minWidth: 820, minHeight: 560)
     }
 
     @ViewBuilder
     private var detailView: some View {
-        switch selection {
+        switch selection ?? .overview {
         case .overview:
             OverviewView(appState: appState)
         case .activity:
@@ -117,25 +103,26 @@ private struct ActivityView: View {
     @ObservedObject var appState: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            PageHeading(
-                title: "Activity",
-                subtitle: "Metadata-only desktop events. Chromium browsing arrives through the extension."
-            )
-            LabeledContent("Application", value: appState.currentAppName)
-            LabeledContent(
-                "Window",
-                value: appState.currentWindowTitle ?? "Unavailable or excluded"
-            )
-            LabeledContent("Queued Events", value: "\(appState.queuedEventCount)")
-            Divider()
-            Text("The native collector observes app switches and accessible window titles. It does not capture browser windows, passwords, screenshots, microphone, or camera in this milestone.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                PageHeading(
+                    title: "Activity",
+                    subtitle: "Metadata-only desktop events. Chromium browsing arrives through the extension."
+                )
+                LabeledContent("Application", value: appState.currentAppName)
+                LabeledContent(
+                    "Window",
+                    value: appState.currentWindowTitle ?? "Unavailable or excluded"
+                )
+                LabeledContent("Queued Events", value: "\(appState.queuedEventCount)")
+                Divider()
+                Text("The native collector observes app switches and accessible window titles. It does not capture browser windows, passwords, screenshots, microphone, or camera in this milestone.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(28)
+            .frame(maxWidth: 760, alignment: .leading)
         }
-        .padding(28)
-        .frame(maxWidth: 760, alignment: .leading)
     }
 }
 
@@ -197,48 +184,49 @@ private struct RuntimeView: View {
     @ObservedObject var appState: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            PageHeading(
-                title: "Runtime",
-                subtitle: "Normal and Eco are available only on external power with Low Power Mode off."
-            )
-            Picker("Sage Mode", selection: Binding(
-                get: { appState.mode },
-                set: { appState.requestMode($0) }
-            )) {
-                ForEach(SageMode.allCases, id: \.self) { mode in
-                    Text(mode.rawValue.capitalized).tag(mode)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                PageHeading(
+                    title: "Runtime",
+                    subtitle: "Normal and Eco are available only on external power with Low Power Mode off."
+                )
+                Picker("Sage Mode", selection: Binding(
+                    get: { appState.mode },
+                    set: { appState.requestMode($0) }
+                )) {
+                    ForEach(SageMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue.capitalized).tag(mode)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
+                .pickerStyle(.segmented)
 
-            HStack(spacing: 10) {
-                Button("Monitoring On") {
-                    appState.requestMonitoring(.on)
+                HStack(spacing: 10) {
+                    Button("Monitoring On") {
+                        appState.requestMonitoring(.on)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Monitoring Off") {
+                        appState.requestMonitoring(.off)
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
-                Button("Monitoring Off") {
-                    appState.requestMonitoring(.off)
-                }
-                .buttonStyle(.bordered)
+                Divider()
+                LabeledContent(
+                    "Power Source",
+                    value: appState.powerState.isOnBattery ? "Battery" : "External Power"
+                )
+                LabeledContent(
+                    "Low Power Mode",
+                    value: appState.powerState.isLowPowerModeEnabled ? "On" : "Off"
+                )
+                LabeledContent(
+                    "Screen",
+                    value: appState.powerState.isScreenLocked ? "Locked" : "Unlocked"
+                )
             }
-            Divider()
-            LabeledContent(
-                "Power Source",
-                value: appState.powerState.isOnBattery ? "Battery" : "External Power"
-            )
-            LabeledContent(
-                "Low Power Mode",
-                value: appState.powerState.isLowPowerModeEnabled ? "On" : "Off"
-            )
-            LabeledContent(
-                "Screen",
-                value: appState.powerState.isScreenLocked ? "Locked" : "Unlocked"
-            )
-            Spacer()
+            .padding(28)
+            .frame(maxWidth: 760, alignment: .leading)
         }
-        .padding(28)
-        .frame(maxWidth: 760, alignment: .leading)
     }
 }
 
