@@ -89,3 +89,4 @@ Sage is a single-user, local-first personal operations assistant for macOS. Tele
 - Core runs natively so every SQLite writer shares macOS locking. n8n remains containerized and calls the host boundary through `host.docker.internal`; the `sage-core` host alias preserves already-deployed workflow compatibility.
 - Native Core environment files are parsed literally by Python rather than sourced by a shell, preserving JSON and tokens containing equals signs.
 - Observer on/off/pause intent is persisted independently from Sage's runtime mode. Core permits collection only when intent is ON and mode is Normal or Eco; Telegram exposes only exact `/observer-*` controls, including bounded and manual pause.
+- The native Memories inspector searches at most 20 active observed or inferred memories and expands bounded provenance on demand. It is read-only until approval-backed correction and forgetting contracts are implemented.

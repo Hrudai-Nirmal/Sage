@@ -15,6 +15,7 @@ Provide one local macOS operator surface and an event-driven desktop metadata co
 - Battery power or Low Power Mode immediately forces Sleep and stops collection. The prior Normal or Eco mode is restored only when that sleep was power-forced, external power returns, Low Power Mode is off, and the screen is unlocked.
 - The visual reference is standard macOS utility software: system typography, semantic colors, SF Symbols, a navigation split view, and native controls. Decorative card grids and custom chrome are intentionally avoided.
 - Every dashboard detail uses a vertical `ScrollView` as its stable, fully constrained root. On macOS 26, the former bare `VStack` plus trailing `Spacer` in Activity and Runtime could remain in the accessibility tree while its rendered controls disappeared after navigation.
+- The Memories section reads at most 20 active Observer memories per search and loads at most 100 provenance edges only after the user expands one memory. It labels observed versus inferred trust, uncertainty, confidence, evidence count, and independent-session count; it does not load raw page bodies or mutate memory.
 
 ## Gotchas
 
@@ -22,3 +23,4 @@ Provide one local macOS operator surface and an event-driven desktop metadata co
 - `SageMode` validation remains code-owned. The UI keeps Sleep and Shutdown selectable on battery while `AppState` rejects Normal or Eco with a clear warning.
 - Browsers are observed only by the Chromium extension; the native app never reads browser window titles.
 - Screen capture, OCR, and vision classification are not active in this slice. Their separate permission and deny-first pipeline must be added before any screenshot API is called.
+- Observer memory inspection is deliberately read-only. Correction and deletion require separate approval-backed contracts before controls may be added to the native app.

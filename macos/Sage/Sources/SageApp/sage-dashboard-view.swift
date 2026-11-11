@@ -9,6 +9,7 @@ import SwiftUI
 private enum DashboardSection: String, CaseIterable, Identifiable {
     case overview = "Overview"
     case activity = "Activity"
+    case memories = "Memories"
     case privacy = "Privacy"
     case runtime = "Runtime"
 
@@ -18,6 +19,7 @@ private enum DashboardSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "gauge.with.dots.needle.50percent"
         case .activity: "waveform.path.ecg"
+        case .memories: "brain.head.profile"
         case .privacy: "hand.raised"
         case .runtime: "switch.2"
         }
@@ -58,6 +60,8 @@ struct SageDashboardView: View {
             OverviewView(appState: appState)
         case .activity:
             ActivityView(appState: appState)
+        case .memories:
+            MemoriesView(appState: appState)
         case .privacy:
             PrivacyView(appState: appState)
         case .runtime:
@@ -122,6 +126,142 @@ private struct ActivityView: View {
             }
             .padding(28)
             .frame(maxWidth: 760, alignment: .leading)
+        }
+    }
+}
+
+private struct MemoriesView: View {
+    @ObservedObject var appState: AppState
+    @State private var searchQuery = ""
+    @State private var selectedMemoryId: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                PageHeading(
+                    title: "Memories",
+                    subtitle: "Inspect active observed and inferred memories with their supporting evidence."
+                )
+                HStack(spacing: 10) {
+                    TextField("Search by topic or entity", text: $searchQuery)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            appState.searchObserverMemories(searchQuery)
+                        }
+                    Button("Search", systemImage: "magnifyingglass") {
+                        appState.searchObserverMemories(searchQuery)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                if appState.isObserverMemorySearchInProgress {
+                    ProgressView("Searching local memory…")
+                }
+                if let memoryError = appState.observerMemoryError {
+                    Label(memoryError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                if appState.observerMemories.isEmpty
+                    && appState.isObserverMemorySearchInProgress == false
+                {
+                    ContentUnavailableView(
+                        "No Memories Found",
+                        systemImage: "brain",
+                        description: Text("Try another topic, or allow Observer to collect meaningful activity.")
+                    )
+                }
+                ForEach(appState.observerMemories) { memory in
+                    Divider()
+                    memoryView(memory)
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: 820, alignment: .leading)
+        }
+        .onAppear {
+            if appState.observerMemories.isEmpty {
+                appState.searchObserverMemories("")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func memoryView(_ memory: ObserverMemory) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(memory.summary)
+                    .font(.headline)
+                    .textSelection(.enabled)
+                Spacer()
+                Text(memory.trustLevel.capitalized)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(memory.trustLevel == "OBSERVED" ? .blue : .purple)
+            }
+            Text(memory.subjectKey)
+                .font(.subheadline.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
+                GridRow {
+                    Text("Confidence").foregroundStyle(.secondary)
+                    Text("\(Int((memory.confidence * 100).rounded()))%")
+                }
+                GridRow {
+                    Text("Evidence").foregroundStyle(.secondary)
+                    Text("\(memory.evidenceCount) events · \(memory.independentSessionCount) sessions")
+                }
+                GridRow {
+                    Text("Last seen").foregroundStyle(.secondary)
+                    Text(memory.lastSeenAt)
+                        .textSelection(.enabled)
+                }
+            }
+            if memory.isUncertain {
+                Label("Uncertain inference", systemImage: "questionmark.diamond")
+                    .foregroundStyle(.orange)
+            }
+            Button(selectedMemoryId == memory.id ? "Hide Evidence" : "Show Evidence") {
+                if selectedMemoryId == memory.id {
+                    selectedMemoryId = nil
+                } else {
+                    selectedMemoryId = memory.id
+                    if appState.observerMemoryEvidence[memory.id] == nil {
+                        appState.loadObserverMemoryEvidence(memoryId: memory.id)
+                    }
+                }
+            }
+            .buttonStyle(.link)
+
+            if selectedMemoryId == memory.id {
+                evidenceView(memoryId: memory.id)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func evidenceView(memoryId: String) -> some View {
+        if appState.observerMemoryEvidenceLoadingIds.contains(memoryId) {
+            ProgressView("Loading provenance…")
+        } else if let evidenceItems = appState.observerMemoryEvidence[memoryId] {
+            if evidenceItems.isEmpty {
+                Text("No retained evidence is available for this memory.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Source Evidence")
+                        .font(.subheadline.weight(.semibold))
+                    ForEach(evidenceItems) { evidence in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(evidence.evidenceExcerpt)
+                                .textSelection(.enabled)
+                            Text("Observed \(evidence.observedAt) · Session \(evidence.sessionId)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .padding(.leading, 12)
+            }
         }
     }
 }

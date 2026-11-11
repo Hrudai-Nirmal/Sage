@@ -76,6 +76,31 @@ public struct ObserverMonitoringUpdate: Codable, Equatable, Sendable {
     }
 }
 
+/// One bounded Observer memory returned for local inspection.
+public struct ObserverMemory: Codable, Equatable, Identifiable, Sendable {
+    public let confidence: Double
+    public let evidenceCount: Int
+    public let firstSeenAt: String
+    public let id: String
+    public let independentSessionCount: Int
+    public let isUncertain: Bool
+    public let lastSeenAt: String
+    public let memoryKind: String
+    public let subjectKey: String
+    public let summary: String
+    public let trustLevel: String
+}
+
+/// One provenance edge supporting an observed or inferred memory.
+public struct ObserverMemoryEvidence: Codable, Equatable, Identifiable, Sendable {
+    public let eventId: String
+    public let evidenceExcerpt: String
+    public let observedAt: String
+    public let sessionId: String
+
+    public var id: String { eventId }
+}
+
 /// Shared JSON configuration keeps dates stable across all loopback calls.
 public enum CoreJsonCoding {
     /// Encoder matching Core's ISO-8601 contract with deterministic keys for tests and diagnostics.

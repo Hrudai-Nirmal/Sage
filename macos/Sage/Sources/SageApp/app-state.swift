@@ -18,6 +18,11 @@ final class AppState: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var mode: SageMode = .sleep
     @Published private(set) var monitoringState = "UNKNOWN"
+    @Published private(set) var observerMemories: [ObserverMemory] = []
+    @Published private(set) var observerMemoryError: String?
+    @Published private(set) var observerMemoryEvidence: [String: [ObserverMemoryEvidence]] = [:]
+    @Published private(set) var observerMemoryEvidenceLoadingIds: Set<String> = []
+    @Published private(set) var isObserverMemorySearchInProgress = false
     @Published private(set) var powerState = HostPowerState(
         isLowPowerModeEnabled: false,
         isOnBattery: true,
@@ -33,6 +38,7 @@ final class AppState: ObservableObject {
     private var isStarted = false
     private var nativeObserverToken: String?
     private var operatorToken: String?
+    private var observerMemorySearchTask: Task<Void, Never>?
     private var statusTask: Task<Void, Never>?
     private var previousRestorableMode: SageMode?
     private var isPowerForced = false
@@ -114,6 +120,8 @@ final class AppState: ObservableObject {
     func stop() {
         statusTask?.cancel()
         statusTask = nil
+        observerMemorySearchTask?.cancel()
+        observerMemorySearchTask = nil
         activityObserver.stop()
         powerMonitor.stop()
         isStarted = false
@@ -123,6 +131,57 @@ final class AppState: ObservableObject {
     func refresh() {
         Task { [weak self] in
             await self?.refreshStatus()
+        }
+    }
+
+    /// Search bounded active Observer memories for the native inspection surface.
+    func searchObserverMemories(_ query: String) {
+        guard let coreClient else {
+            observerMemoryError = "Sage Core is unavailable."
+            return
+        }
+        observerMemorySearchTask?.cancel()
+        isObserverMemorySearchInProgress = true
+        observerMemoryError = nil
+        observerMemorySearchTask = Task { [weak self] in
+            do {
+                let memories = try await coreClient.searchObserverMemories(
+                    query: query,
+                    resultLimit: 20
+                )
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.observerMemories = memories
+                self?.isObserverMemorySearchInProgress = false
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.observerMemoryError = "Sage could not search Observer memories."
+                self?.isObserverMemorySearchInProgress = false
+            }
+        }
+    }
+
+    /// Load bounded provenance for one memory after an explicit inspection action.
+    func loadObserverMemoryEvidence(memoryId: String) {
+        guard let coreClient else {
+            observerMemoryError = "Sage Core is unavailable."
+            return
+        }
+        guard observerMemoryEvidenceLoadingIds.contains(memoryId) == false else {
+            return
+        }
+        observerMemoryEvidenceLoadingIds.insert(memoryId)
+        observerMemoryError = nil
+        Task { [weak self] in
+            do {
+                let evidence = try await coreClient.getObserverMemoryEvidence(memoryId: memoryId)
+                self?.observerMemoryEvidence[memoryId] = evidence
+            } catch {
+                self?.observerMemoryError = "Sage could not load memory evidence."
+            }
+            self?.observerMemoryEvidenceLoadingIds.remove(memoryId)
         }
     }
 

@@ -7,6 +7,8 @@ import Foundation
 /// Failures detected before or while communicating with local Sage Core.
 public enum CoreRequestError: Error, Equatable, Sendable {
     case invalidBaseUrl
+    case invalidIdentifier
+    case invalidSearchBounds
     case missingCredential
     case rejected(statusCode: Int)
 }
@@ -39,6 +41,48 @@ public struct CoreRequestFactory: Sendable {
     /// Build a read-only effective Observer status request.
     public func makeObserverStatusRequest() -> URLRequest {
         makeRequest(path: "/v1/observer/status", method: "GET")
+    }
+
+    /// Build a bounded read-only Observer memory search.
+    public func makeObserverMemorySearchRequest(
+        query: String,
+        resultLimit: Int
+    ) throws -> URLRequest {
+        guard query.count <= 2_000, (1...100).contains(resultLimit) else {
+            throw CoreRequestError.invalidSearchBounds
+        }
+        let endpointUrl = baseUrl.appending(path: "v1/observer/memories")
+        guard var components = URLComponents(
+            url: endpointUrl,
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw CoreRequestError.invalidBaseUrl
+        }
+        components.queryItems = [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "resultLimit", value: String(resultLimit)),
+        ]
+        guard let requestUrl = components.url else {
+            throw CoreRequestError.invalidBaseUrl
+        }
+        return makeRequest(url: requestUrl, method: "GET")
+    }
+
+    /// Build a read-only provenance request for one validated memory identifier.
+    public func makeObserverMemoryEvidenceRequest(memoryId: String) throws -> URLRequest {
+        let allowedCharacters = CharacterSet.alphanumerics.union(
+            CharacterSet(charactersIn: "-_")
+        )
+        guard !memoryId.isEmpty,
+              memoryId.count <= 100,
+              memoryId.unicodeScalars.allSatisfy(allowedCharacters.contains)
+        else {
+            throw CoreRequestError.invalidIdentifier
+        }
+        return makeRequest(
+            path: "/v1/observer/memories/\(memoryId)/evidence",
+            method: "GET"
+        )
     }
 
     /// Build an operator-authorized runtime mode change.
@@ -103,7 +147,14 @@ public struct CoreRequestFactory: Sendable {
     }
 
     private func makeRequest(path: String, method: String) -> URLRequest {
-        var request = URLRequest(url: baseUrl.appending(path: path.trimmingPrefix("/")))
+        makeRequest(
+            url: baseUrl.appending(path: path.trimmingPrefix("/")),
+            method: method
+        )
+    }
+
+    private func makeRequest(url: URL, method: String) -> URLRequest {
+        var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 5
         return request
@@ -139,6 +190,38 @@ public struct CoreClient: Sendable {
             return try await execute(
                 requestFactory.makeObserverStatusRequest(),
                 responseType: ObserverStatus.self
+            )
+        } catch {
+            throw error
+        }
+    }
+
+    /// Search recent active Observer memories without loading the full store.
+    public func searchObserverMemories(
+        query: String,
+        resultLimit: Int = 20
+    ) async throws -> [ObserverMemory] {
+        do {
+            return try await execute(
+                requestFactory.makeObserverMemorySearchRequest(
+                    query: query,
+                    resultLimit: resultLimit
+                ),
+                responseType: [ObserverMemory].self
+            )
+        } catch {
+            throw error
+        }
+    }
+
+    /// Fetch bounded evidence provenance for one Observer memory.
+    public func getObserverMemoryEvidence(
+        memoryId: String
+    ) async throws -> [ObserverMemoryEvidence] {
+        do {
+            return try await execute(
+                requestFactory.makeObserverMemoryEvidenceRequest(memoryId: memoryId),
+                responseType: [ObserverMemoryEvidence].self
             )
         } catch {
             throw error

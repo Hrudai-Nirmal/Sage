@@ -14,6 +14,7 @@ Normalize permitted ambient activity, group it into durable sessions, and store 
 - Two independent sessions are required for ordinary inferred semantic memory.
 - Entertainment candidates never create semantic interests.
 - FTS rows are maintained transactionally with memory rows.
+- The native macOS inspector uses the existing bounded memory search and evidence endpoints; it never receives full raw page extracts through these read models.
 
 ## Gotchas
 

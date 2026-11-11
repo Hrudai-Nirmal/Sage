@@ -88,7 +88,7 @@ def testDashboardSectionsUseStableFullPageContainers():
     ).read_text()
     activitySource = dashboardSource.split(
         "private struct ActivityView", maxsplit=1
-    )[1].split("private struct PrivacyView", maxsplit=1)[0]
+    )[1].split("private struct MemoriesView", maxsplit=1)[0]
     runtimeSource = dashboardSource.split(
         "private struct RuntimeView", maxsplit=1
     )[1].split("private struct StatusRows", maxsplit=1)[0]
@@ -97,6 +97,23 @@ def testDashboardSectionsUseStableFullPageContainers():
     assert "Spacer()" not in activitySource
     assert "ScrollView {" in runtimeSource
     assert "Spacer()" not in runtimeSource
+
+
+def testDashboardExposesSearchableObserverMemoryEvidence():
+    """The native operator must inspect bounded memories and their provenance."""
+    dashboardSource = (
+        PROJECT_ROOT / "macos/Sage/Sources/SageApp/sage-dashboard-view.swift"
+    ).read_text()
+    stateSource = (
+        PROJECT_ROOT / "macos/Sage/Sources/SageApp/app-state.swift"
+    ).read_text()
+
+    assert 'case memories = "Memories"' in dashboardSource
+    assert "private struct MemoriesView" in dashboardSource
+    assert "appState.searchObserverMemories" in dashboardSource
+    assert "appState.loadObserverMemoryEvidence" in dashboardSource
+    assert "@Published private(set) var observerMemories" in stateSource
+    assert "@Published private(set) var observerMemoryEvidence" in stateSource
 
 
 def testSageShutdownStopsTheLaunchedDesktopProcess():
